@@ -4,10 +4,23 @@ Turn a solo piano recording (mp3, m4a, wav, flac) into a **performance MIDI**: e
 
 Transcription is done by [Transkun](https://github.com/Yujia-Yan/Transkun) (Yan & Duan), a piano-specific model that predicts notes, velocities and pedals. piano2midi adds audio decoding, a small conservative clean-up, batch processing, a CLI and an HTTP API.
 
+## Demo
+
+**Glenn Gould: J.S. Bach, Partita No. 2 in C minor, BWV 826 (rehearsal recording)**
+
+[![The transcribed MIDI playing in Pianoteq](demo/pianoteq-preview.jpg)](demo/gould-partita-2-pianoteq.mp4)
+
+| | |
+|---|---|
+| Transcribed MIDI (download) | [`demo/gould-partita-2-rehearsal.mid`](demo/gould-partita-2-rehearsal.mid) |
+| The MIDI played back in Pianoteq 9 (NY Steinway D Classical, on iPad) | [`demo/gould-partita-2-pianoteq.mp4`](demo/gould-partita-2-pianoteq.mp4) |
+
+Default settings, no manual edits: 1 min 47 s of audio gave 1,229 notes with velocities from 36 to 93 and a single short pedal press (Gould plays this music almost without pedal). Transcription took about a minute on two CPU cores.
+
 ## Quick start (macOS / Linux)
 
 ```bash
-git clone https://github.com/<you>/piano2midi.git
+git clone https://github.com/kaisenyao/piano2midi.git
 cd piano2midi
 ./setup.sh                 # one time: creates .venv and installs everything (1–2 GB)
 ```
@@ -25,12 +38,6 @@ output/
   extras/song.raw.mid      <- untouched model output, for comparison
   extras/song.json         <- duration, note count, velocity range, pedal count, timing
 ```
-
-### 中文快速上手
-
-1. 终端里运行一次 `./setup.sh`。
-2. 把音频文件（mp3、m4a、wav、flac）放进 `input/`，双击 `Convert.command`。
-3. 在 `output/` 里拿到同名 `.mid`，导入 Pianoteq 播放。
 
 ## What the clean-up does (and does not do)
 
@@ -63,7 +70,7 @@ uvicorn piano2midi.api:app --port 8000
 curl -F file=@song.mp3 "http://localhost:8000/transcribe" -o song.mid
 ```
 
-`GET /health`, `POST /transcribe` (multipart field `file`; optional query flags `legato`, `keep_soft_pedal`, `pedal_ramps`, all false by default). The response is the MIDI file; a summary is in the `X-Piano2MIDI-Info` header. A CPU `Dockerfile` is included. Requests are processed one at a time per process (roughly real-time speed on 2 CPU cores).
+`GET /health`, `POST /transcribe` (multipart field `file`; optional query flags `legato`, `keep_soft_pedal`, `pedal_ramps`, all false by default). The response is the MIDI file; a summary is in the `X-Piano2MIDI-Info` header. A CPU `Dockerfile` is included. Requests are processed one at a time per process; on 2 CPU cores a recording takes about half to three quarters of its own length.
 
 ## Limits
 

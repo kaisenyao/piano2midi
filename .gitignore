@@ -17,3 +17,9 @@ output/*
 *.aif
 *.aiff
 *.mid
+
+# demo media is part of the repo
+!demo/
+!demo/*.mid
+!demo/*.mp4
+!demo/*.jpg
