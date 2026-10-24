@@ -1,67 +1,93 @@
-# piano2midi
+<h1 align="center">piano2midi</h1>
 
-Turn a solo piano recording (mp3, m4a, wav, flac) into a **performance MIDI**: every note with its real timing, velocity and release, plus the sustain pedal (CC64). Nothing is quantized, so rubato and voicing survive. The output is meant to be played back through a good piano engine such as Pianoteq, or by a self-playing piano.
+<p align="center">
+  Solo piano recording in, performance MIDI out.<br>
+  Notes, timing, velocity and sustain pedal, ready for Pianoteq or a self-playing piano.
+</p>
 
-Transcription is done by [Transkun](https://github.com/Yujia-Yan/Transkun) (Yan & Duan), a piano-specific model that predicts notes, velocities and pedals. piano2midi adds audio decoding, a small conservative clean-up, batch processing, a CLI and an HTTP API.
+<p align="center">
+  <img src="demo/pianoteq-playback.gif" alt="A transcribed Glenn Gould recording playing in Pianoteq" width="720">
+</p>
+
+<p align="center">
+  <sub>Glenn Gould's rehearsal of Bach's Partita No. 2, transcribed by piano2midi and played back in Pianoteq 9 (20-second excerpt).</sub>
+</p>
+
+<p align="center">
+  <a href="#demo">Demo</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#what-piano2midi-changes">What it changes</a> ·
+  <a href="#http-api">HTTP API</a> ·
+  <a href="#limits">Limits</a>
+</p>
+
+## Why piano2midi
+
+- **Keeps the performance.** Every note keeps its real onset, release and velocity. Nothing is quantized, so rubato, voicing and articulation survive.
+- **Sustain pedal included.** Pedal presses come out as standard CC64 events.
+- **Batch friendly.** Drop recordings into a folder and convert them all at once. Files that are already done are skipped.
+- **Runs on your machine.** A CPU is enough. No account, no API key. An HTTP API and a Dockerfile are included for servers.
+
+Transcription is done by [Transkun](https://github.com/Yujia-Yan/Transkun) (Yan & Duan), a piano-specific model that predicts notes, velocities and pedals. piano2midi adds audio decoding, a small conservative clean-up, batch processing, a command line tool and an HTTP API.
 
 ## Demo
 
 **Glenn Gould: J.S. Bach, Partita No. 2 in C minor, BWV 826 (rehearsal recording)**
 
-<table>
-  <tr>
-    <th>Original recording (YouTube)</th>
-    <th>Transcribed MIDI played in Pianoteq 9</th>
-  </tr>
-  <tr>
-    <td><a href="https://www.youtube.com/watch?v=WqwZC-yLYI4"><img src="https://img.youtube.com/vi/WqwZC-yLYI4/hqdefault.jpg" alt="Glenn Gould, Partita No. 2 rehearsal, on YouTube" width="400"></a></td>
-    <td><img src="demo/pianoteq-playback.gif" alt="The transcribed MIDI playing in Pianoteq" width="400"></td>
-  </tr>
-</table>
+### Original
 
-Click the thumbnail to hear the original on YouTube. The animation is a 20-second excerpt of the transcribed MIDI playing in Pianoteq 9 (NY Steinway D Classical preset, on iPad).
+<a href="https://www.youtube.com/watch?v=WqwZC-yLYI4"><img src="https://img.youtube.com/vi/WqwZC-yLYI4/hqdefault.jpg" alt="Glenn Gould, Partita No. 2 rehearsal, on YouTube" width="480"></a>
 
-**Full Pianoteq playback with sound:**
+<sub>Click to watch on YouTube.</sub>
+
+### Transcription, played in Pianoteq 9
 
 https://github.com/user-attachments/assets/e107c305-03e0-433c-b7a5-b078e7d4ffdf
 
-Download the MIDI: [`demo/gould-partita-2-rehearsal.mid`](demo/gould-partita-2-rehearsal.mid).
+<sub>NY Steinway D Classical preset, on iPad. Full length, with sound.</sub>
 
-Default settings, no manual edits: 1 min 47 s of audio gave 1,229 notes with velocities from 36 to 93 and a single short pedal press (Gould plays this music almost without pedal). Transcription took about a minute on two CPU cores.
+| Audio | Notes | Velocity | Sustain pedal | Settings | Time |
+|---|---|---|---|---|---|
+| 1 min 47 s | 1,229 | 36–93 | 1 short press | default, no manual edits | about 1 min on 2 CPU cores |
 
-## Quick start (macOS / Linux)
+Gould plays this music almost without pedal, and the transcription reflects that. Download the MIDI: [`demo/gould-partita-2-rehearsal.mid`](demo/gould-partita-2-rehearsal.mid)
 
-```bash
-git clone https://github.com/kaisenyao/piano2midi.git
-cd piano2midi
-./setup.sh                 # one time: creates .venv and installs everything (1–2 GB)
-```
+## Quick start
 
-Then either:
+**Requirements:** macOS or Linux, Python 3.10+ (or [uv](https://github.com/astral-sh/uv)), about 1–2 GB of disk space.
 
-- put audio files in `input/` and double-click **Convert.command** (macOS), or
-- run `./run.sh path/to/song.mp3` (or `./run.sh input` for the whole folder).
+1. Install once:
 
-MIDI files appear in `output/` with the same names. Files that were already converted are skipped, so you can keep adding music to `input/` and double-click again; pass `--overwrite` to convert them again.
+   ```bash
+   git clone https://github.com/kaisenyao/piano2midi.git
+   cd piano2midi
+   ./setup.sh
+   ```
+
+2. Put your recordings (mp3, m4a, wav, flac) in `input/`.
+3. Double-click **Convert.command** (macOS) or run `./run.sh`.
+4. Play the MIDI files from `output/`.
+
+To convert a single file, run `./run.sh path/to/song.mp3`. Already converted files are skipped; add `--overwrite` to convert them again.
 
 ```text
 output/
-  song.mid                 <- the file to play
-  extras/song.raw.mid      <- untouched model output, for comparison
-  extras/song.json         <- duration, note count, velocity range, pedal count, timing
+  song.mid               the file to play
+  extras/song.raw.mid    untouched model output, for comparison
+  extras/song.json       duration, note count, velocity range, pedal count, timing
 ```
 
-## What the clean-up does (and does not do)
+## What piano2midi changes
 
-By default the model output is kept as is, except for three safety fixes. Onsets, pitches and velocities are never changed.
+The model output is kept as is, apart from three small fixes that are on by default. Onsets, pitches and velocities are never changed.
 
-| Step | Default | Why |
+| Fix | Default | Why |
 |---|---|---|
-| Same-pitch overlaps are trimmed | on | a key cannot be pressed twice without being released |
-| Soft pedal (CC67) is dropped | on | its prediction is unreliable and it changes the tone of whole passages (`--keep-soft-pedal` to keep it) |
-| Pedal released at the end | on | no hanging pedal |
-| Melody gaps closed | off | `--legato`: holds the top voice 20 ms into the next note when the gap is ≤ 100 ms (notes 60–600 ms, never repeated notes). Useful for cantabile pieces; leave it off for detached playing, where it would erase the articulation (on Glenn Gould's Bach it would have changed ~18% of the notes) |
-| Pedal ramps | off | `--pedal-ramps` replaces instant 0/127 jumps with ~50 ms foot travel |
+| Trim same-pitch overlaps | on | A key can't be pressed again before it is released. |
+| Drop the soft pedal (CC67) | on | Its prediction is unreliable and colors whole passages. Keep it with `--keep-soft-pedal`. |
+| Release the pedal at the end | on | No hanging pedal. |
+| Close short melody gaps | off | `--legato` holds the top voice 20 ms into the next note when the gap is 100 ms or less. Good for cantabile pieces. On Gould's detached Bach it would have changed about 18% of the notes. |
+| Pedal ramps | off | `--pedal-ramps` turns instant 0/127 jumps into about 50 ms of foot travel. |
 
 Not done on purpose: quantization, velocity "humanizing" or rescaling, hand separation, score correction, source separation.
 
@@ -72,9 +98,9 @@ piano2midi INPUT... [-o OUTPUT_DIR] [--overwrite] [--legato] [--keep-soft-pedal]
                     [--pedal-ramps] [--device auto|cpu|cuda|mps] [--threads N]
 ```
 
-`--device auto` uses CUDA when available, otherwise CPU. CPU is reliable on Apple Silicon; `mps` is opt-in.
+`--device auto` uses CUDA when available and the CPU otherwise. The CPU is reliable on Apple Silicon; `mps` is opt-in.
 
-## HTTP API / cloud
+## HTTP API
 
 ```bash
 pip install -e ".[api]"
@@ -82,13 +108,18 @@ uvicorn piano2midi.api:app --port 8000
 curl -F file=@song.mp3 "http://localhost:8000/transcribe" -o song.mid
 ```
 
-`GET /health`, `POST /transcribe` (multipart field `file`; optional query flags `legato`, `keep_soft_pedal`, `pedal_ramps`, all false by default). The response is the MIDI file; a summary is in the `X-Piano2MIDI-Info` header. A CPU `Dockerfile` is included. Requests are processed one at a time per process; on 2 CPU cores a recording takes about half to three quarters of its own length.
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Status, and whether the model is loaded. |
+| `POST /transcribe` | Multipart field `file`. Optional query flags `legato`, `keep_soft_pedal`, `pedal_ramps` (all false by default). Returns the MIDI file, with a summary in the `X-Piano2MIDI-Info` header. |
+
+A CPU `Dockerfile` is included. Each process handles one request at a time; on 2 CPU cores a recording takes about half to three quarters of its own length.
 
 ## Limits
 
-- Works best on **solo piano**. Songs with vocals or a band will produce many wrong notes; there is no source separation yet.
-- Pedal is on/off: half-pedaling is not recovered.
-- Expect some missed soft inner notes and occasional wrong notes in dense passages. It is a performance transcription, not a score.
+- Works best on **solo piano**. Songs with vocals or a band produce many wrong notes; there is no source separation yet.
+- The pedal is on/off. Half-pedaling is not recovered.
+- Expect some missed soft inner notes and occasional wrong notes in dense passages. This is a performance transcription, not a score.
 - Bring your own audio. This project does not download from streaming services.
 
 ## Development
@@ -100,5 +131,5 @@ curl -F file=@song.mp3 "http://localhost:8000/transcribe" -o song.mid
 
 ## Credits and licenses
 
-- piano2midi: MIT (see `LICENSE`).
-- Transkun: MIT, by Yujia Yan and Zhiyao Duan. The pretrained weights ship inside the `transkun` pip package and were trained on the MAESTRO dataset (CC BY-NC-SA 4.0); check those terms before any commercial use.
+- piano2midi: MIT (see [`LICENSE`](LICENSE)).
+- [Transkun](https://github.com/Yujia-Yan/Transkun): MIT, by Yujia Yan and Zhiyao Duan. The pretrained weights ship inside the `transkun` pip package and were trained on the MAESTRO dataset (CC BY-NC-SA 4.0); check those terms before any commercial use.
