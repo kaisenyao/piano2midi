@@ -1,0 +1,11 @@
+.venv
+.git
+input
+output
+tests
+**/__pycache__
+*.mid
+*.mp3
+*.m4a
+*.wav
+*.flac
