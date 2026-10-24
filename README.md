@@ -8,12 +8,18 @@ Transcription is done by [Transkun](https://github.com/Yujia-Yan/Transkun) (Yan 
 
 **Glenn Gould: J.S. Bach, Partita No. 2 in C minor, BWV 826 (rehearsal recording)**
 
-[![The transcribed MIDI playing in Pianoteq](demo/pianoteq-preview.jpg)](demo/gould-partita-2-pianoteq.mp4)
+<table>
+  <tr>
+    <th>Original recording (YouTube)</th>
+    <th>Transcribed MIDI played in Pianoteq 9</th>
+  </tr>
+  <tr>
+    <td><a href="https://www.youtube.com/watch?v=WqwZC-yLYI4"><img src="https://img.youtube.com/vi/WqwZC-yLYI4/hqdefault.jpg" alt="Glenn Gould, Partita No. 2 rehearsal, on YouTube" width="400"></a></td>
+    <td><a href="demo/gould-partita-2-pianoteq.mp4"><img src="demo/pianoteq-preview.jpg" alt="The transcribed MIDI playing in Pianoteq" width="400"></a></td>
+  </tr>
+</table>
 
-| | |
-|---|---|
-| Transcribed MIDI (download) | [`demo/gould-partita-2-rehearsal.mid`](demo/gould-partita-2-rehearsal.mid) |
-| The MIDI played back in Pianoteq 9 (NY Steinway D Classical, on iPad) | [`demo/gould-partita-2-pianoteq.mp4`](demo/gould-partita-2-pianoteq.mp4) |
+Click an image to play it. Download the MIDI: [`demo/gould-partita-2-rehearsal.mid`](demo/gould-partita-2-rehearsal.mid). Playback uses the NY Steinway D Classical preset in Pianoteq 9 on iPad.
 
 Default settings, no manual edits: 1 min 47 s of audio gave 1,229 notes with velocities from 36 to 93 and a single short pedal press (Gould plays this music almost without pedal). Transcription took about a minute on two CPU cores.
 
