@@ -36,15 +36,20 @@ Transcription is done by [Transkun](https://github.com/Yujia-Yan/Transkun) (Yan 
 
 <table>
   <tr>
-    <th width="50%">Original (YouTube)</th>
+    <th width="50%">Original</th>
     <th width="50%">Transcription, played in Pianoteq 9</th>
   </tr>
   <tr>
-    <td><a href="https://www.youtube.com/watch?v=WqwZC-yLYI4"><img src="https://img.youtube.com/vi/WqwZC-yLYI4/hqdefault.jpg" alt="Glenn Gould, Partita No. 2 rehearsal, on YouTube" width="400"></a></td>
-    <td><video src="https://github.com/user-attachments/assets/66c23753-2c38-4d77-9b6e-b4bc9aa24dfe" width="400" controls></video></td>
+    <td valign="top">
+      <a href="https://www.youtube.com/watch?v=WqwZC-yLYI4">&#9654;&nbsp; Watch on YouTube</a>
+      <a href="https://www.youtube.com/watch?v=WqwZC-yLYI4"><img src="https://img.youtube.com/vi/WqwZC-yLYI4/hqdefault.jpg" alt="Glenn Gould, Partita No. 2 rehearsal, on YouTube" width="100%"></a>
+    </td>
+    <td valign="top">
+      <video src="https://github.com/user-attachments/assets/66c23753-2c38-4d77-9b6e-b4bc9aa24dfe" width="100%" controls></video>
+    </td>
   </tr>
   <tr>
-    <td><sub>Click to watch on YouTube.</sub></td>
+    <td><sub>Glenn Gould's rehearsal recording. Opens on YouTube.</sub></td>
     <td><sub>NY Steinway D Classical preset, on iPad. Full length, with sound.</sub></td>
   </tr>
 </table>
