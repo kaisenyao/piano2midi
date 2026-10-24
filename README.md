@@ -34,14 +34,14 @@ output/
 
 ## What the clean-up does (and does not do)
 
-The model output is kept as is, except for these small fixes. Onsets, pitches and velocities are never changed.
+By default the model output is kept as is, except for three safety fixes. Onsets, pitches and velocities are never changed.
 
 | Step | Default | Why |
 |---|---|---|
 | Same-pitch overlaps are trimmed | on | a key cannot be pressed twice without being released |
-| Short melody gaps are closed | on | models end notes slightly early; with the pedal up this turns legato into small holes. Only for the top voice, only notes 60–600 ms long, only gaps ≤ 100 ms, never for repeated notes |
 | Soft pedal (CC67) is dropped | on | its prediction is unreliable and it changes the tone of whole passages (`--keep-soft-pedal` to keep it) |
 | Pedal released at the end | on | no hanging pedal |
+| Melody gaps closed | off | `--legato`: holds the top voice 20 ms into the next note when the gap is ≤ 100 ms (notes 60–600 ms, never repeated notes). Useful for cantabile pieces; leave it off for detached playing, where it would erase the articulation (on Glenn Gould's Bach it would have changed ~18% of the notes) |
 | Pedal ramps | off | `--pedal-ramps` replaces instant 0/127 jumps with ~50 ms foot travel |
 
 Not done on purpose: quantization, velocity "humanizing" or rescaling, hand separation, score correction, source separation.
@@ -49,7 +49,7 @@ Not done on purpose: quantization, velocity "humanizing" or rescaling, hand sepa
 ## Options
 
 ```text
-piano2midi INPUT... [-o OUTPUT_DIR] [--overwrite] [--no-legato] [--keep-soft-pedal]
+piano2midi INPUT... [-o OUTPUT_DIR] [--overwrite] [--legato] [--keep-soft-pedal]
                     [--pedal-ramps] [--device auto|cpu|cuda|mps] [--threads N]
 ```
 
@@ -63,7 +63,7 @@ uvicorn piano2midi.api:app --port 8000
 curl -F file=@song.mp3 "http://localhost:8000/transcribe" -o song.mid
 ```
 
-`GET /health`, `POST /transcribe` (multipart field `file`; query flags `legato`, `keep_soft_pedal`, `pedal_ramps`). The response is the MIDI file; a summary is in the `X-Piano2MIDI-Info` header. A CPU `Dockerfile` is included. Requests are processed one at a time per process (roughly real-time speed on 2 CPU cores).
+`GET /health`, `POST /transcribe` (multipart field `file`; optional query flags `legato`, `keep_soft_pedal`, `pedal_ramps`, all false by default). The response is the MIDI file; a summary is in the `X-Piano2MIDI-Info` header. A CPU `Dockerfile` is included. Requests are processed one at a time per process (roughly real-time speed on 2 CPU cores).
 
 ## Limits
 

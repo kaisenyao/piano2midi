@@ -18,7 +18,7 @@ EXTRAS_DIR = "extras"
 
 @dataclass
 class Options:
-    legato: bool = True
+    legato: bool = False
     keep_soft_pedal: bool = False
     pedal_ramps: bool = False
 

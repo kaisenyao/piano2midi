@@ -76,12 +76,14 @@ def fix_same_pitch_overlaps(notes, report: CleanupReport) -> None:
 
 
 def close_melody_gaps(notes, ccs, report: CleanupReport) -> None:
-    """Close short silences in the top line that transcription leaves at pedal changes.
+    """Opt-in: close short silences in the top line (for cantabile, legato repertoire).
 
-    Transcribers tend to end notes a little early. With the pedal up, that turns
-    a legato melody into small holes. For the highest note of each chord, if it
-    is of ordinary length and the next top-line note (a different pitch) starts
-    within 100 ms of it going silent, hold it 20 ms into that next note.
+    For the highest note of each chord, if it is of ordinary length and the next
+    top-line note (a different pitch) starts within 100 ms of it going silent,
+    hold it 20 ms into that next note.
+
+    Off by default: it assumes legato intent. On detached playing (e.g. Glenn Gould's
+    Bach, almost no pedal) it changed ~18% of the notes and would erase the articulation.
     """
     intervals = _pedal_intervals(ccs)
     starts = [a for a, _ in intervals]
@@ -149,7 +151,7 @@ def smooth_pedal(ccs, report: CleanupReport, travel: float = 0.05) -> list:
 
 
 def clean(midi: pretty_midi.PrettyMIDI, *, keep_soft_pedal: bool = False,
-          legato: bool = True, pedal_ramps: bool = False) -> tuple[pretty_midi.PrettyMIDI, CleanupReport]:
+          legato: bool = False, pedal_ramps: bool = False) -> tuple[pretty_midi.PrettyMIDI, CleanupReport]:
     """Return a cleaned single-track piano MIDI and a report of what changed."""
     report = CleanupReport()
     notes = [pretty_midi.Note(n.velocity, n.pitch, n.start, n.end)

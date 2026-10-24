@@ -41,7 +41,7 @@ def health():
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
-    legato: bool = Query(True, description="close short melody gaps"),
+    legato: bool = Query(False, description="close short melody gaps (legato repertoire)"),
     keep_soft_pedal: bool = Query(False),
     pedal_ramps: bool = Query(False),
 ):

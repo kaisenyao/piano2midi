@@ -25,7 +25,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--output", default="output", help="output folder (default: ./output)")
     p.add_argument("--overwrite", action="store_true",
                    help="convert again and replace MIDI files that already exist (default: skip them)")
-    p.add_argument("--no-legato", action="store_true", help="do not close short melody gaps")
+    p.add_argument("--legato", action="store_true",
+                   help="close short gaps (<=100 ms) in the top voice; for cantabile/legato pieces, off by default")
     p.add_argument("--keep-soft-pedal", action="store_true", help="keep predicted una corda (CC67) events")
     p.add_argument("--pedal-ramps", action="store_true", help="replace instant pedal jumps with ~50 ms ramps")
     p.add_argument("--device", default="auto", help="auto (default), cpu, cuda or mps")
@@ -41,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         print("No audio files found (mp3, m4a, wav, flac, aac, ogg, aiff).", file=sys.stderr)
         return 2
 
-    options = Options(legato=not args.no_legato, keep_soft_pedal=args.keep_soft_pedal,
+    options = Options(legato=args.legato, keep_soft_pedal=args.keep_soft_pedal,
                       pedal_ramps=args.pedal_ramps)
     done, failed, skipped = [], [], []
     todo = []
