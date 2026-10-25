@@ -63,8 +63,8 @@ VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use
 # What she says when woken and you pause, in the language of the name you used; made once with the ElevenLabs
 # voice and kept in output/.cache/voice. Without ElevenLabs she beeps instead.
 GREETINGS = {
-    "zh": ["\u8bf6\uff0c\u6211\u5728\u5462\uff01", "\u6765\u5566\uff5e\u60f3\u542c\u70b9\u4ec0\u4e48\u5440\uff1f", "\u597d\u5440\uff0c\u4f60\u8bf4\uff5e"],
-    # ei, wo zai ne! / lai la, xiang ting dian shenme ya? / hao ya, ni shuo
+    "zh": ["\u8bf6\uff0c\u6211\u5728\u5462\uff01", "\u6765\u5566\uff5e\u60f3\u542c\u70b9\u4ec0\u4e48\u5440\uff1f", "\u55ef\u55ef\uff0c\u4f60\u8bf4\uff5e"],
+    # ei, wo zai ne! / lai la, xiang ting dian shenme ya? / en en, ni shuo
     "en": ["Hi! I'm here.", "Sure, I'm listening!"],
 }
 # How the greetings are said, picked by ear by the owner: freer than replies, with some character, quick.
