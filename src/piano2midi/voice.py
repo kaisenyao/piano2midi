@@ -63,14 +63,17 @@ VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use
 # What she says when woken and you pause, in the language of the name you used; made once with the ElevenLabs
 # voice and kept in output/.cache/voice. Without ElevenLabs she beeps instead.
 GREETINGS = {
-    "zh": ["\u5728\u5462\u5728\u5462\uff01", "\u563f\uff0c\u6211\u5728\uff01", "\u6765\u5566\u6765\u5566\uff01", "\u6211\u5728\u5462\uff0c\u600e\u4e48\u5566\uff1f",
-           "\u55e8\uff0c\u6211\u5728\uff01", "\u4f60\u8bf4\u4f60\u8bf4\uff01"],
-    # zai ne zai ne! / hei, wo zai! / lai la lai la! / wo zai ne, zenme la? / hai, wo zai! / ni shuo ni shuo!
-    "en": ["Yes! I'm here!", "Hey! What's up?", "I'm all ears!", "Yes? I'm listening!", "Hi there!", "Here I am!"],
+    "zh": ["\u54c8\u55bd\u54c8\u55bd\uff0c\u6211\u5728\u5462\uff01", "\u8bf6\uff01\u5728\u5462\u5728\u5462\uff01", "\u6765\u5566\u6765\u5566\uff0c\u4f60\u8bf4\uff01",
+           "\u6211\u5728\u6211\u5728\uff01\u8981\u542c\u4ec0\u4e48\u5440\uff1f", "\u55e8\u55e8\uff0c\u6211\u5728\u8fd9\u513f\u5462\uff01", "\u5728\u7684\u5728\u7684\uff0c\u4f60\u8bf4\u5427\uff01"],
+    # hallo hallo, wo zai ne! / ei! zai ne zai ne! / lai la lai la, ni shuo! / wo zai wo zai! yao ting shenme ya? /
+    # hai hai, wo zai zher ne! / zai de zai de, ni shuo ba!
+    "en": ["Yes! I'm right here!", "Hey hey! What's up?", "Hi! I'm all ears!", "Yes yes, I'm listening!",
+           "Hey there! What shall I play?", "Here I am! What's up?"],
 }
-# Greetings are said brightly: an ElevenLabs audio tag, a little less steady than replies, and a touch faster.
+# Short lines hide their mood, so greetings are said with feeling: an ElevenLabs audio tag, less steady than
+# replies, with some style exaggeration, and a touch faster. Replies keep the defaults.
 GREETING_TAG = "[excited] "
-GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.35, "speed": 1.1}
+GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.3, "style": 0.4, "speed": 1.1}
 GO_ON_FRAMES = 4  # after the wake word, 0.32 s to tell whether you go straight on with the request
 START_TIMEOUT_S = 6.0  # wait this long for speech to begin after the wake word
 END_SILENCE_S = 0.8  # this much silence ends the request
