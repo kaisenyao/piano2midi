@@ -64,17 +64,17 @@ VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use
 # What she says when woken and you pause, in the language of the name you used; made once with the ElevenLabs
 # voice and kept in output/.cache/voice. Without ElevenLabs she beeps instead.
 GREETINGS = {
-    "zh": ["\u54c8\u55bd\uff0c\u6211\u5728\u5462\uff01", "\u8bf6\uff0c\u6211\u5728\uff01\u60f3\u542c\u4ec0\u4e48\uff1f", "\u6765\u5566\u6765\u5566\uff0c\u4f60\u8bf4\uff01",
-           "\u5728\u5462\uff01\u60f3\u542c\u4ec0\u4e48\u5440\uff1f", "\u55e8\uff0c\u6211\u5728\u8fd9\u513f\u5462\uff01", "\u6211\u6765\u5566\uff0c\u4f60\u8bf4\u5427\uff01"],
-    # hallo, wo zai ne! / ei, wo zai! xiang ting shenme? / lai la lai la, ni shuo! / zai ne! xiang ting shenme ya? /
-    # hai, wo zai zher ne! / wo lai la, ni shuo ba!   (at most one doubled word, so they do not all sound alike)
-    "en": ["Yes! I'm right here!", "Hey! What's up?", "Hi! I'm all ears!", "I'm listening! Go ahead!",
-           "Hey there! What shall I play?", "Here I am! Tell me!"],
+    "zh": ["\u6211\u5728\u5462\uff01", "\u5728\u7684\uff0c\u4f60\u8bf4\u5427\uff01", "\u6211\u5728\uff0c\u60f3\u542c\u4ec0\u4e48\uff1f", "\u6765\u5566\uff0c\u4f60\u8bf4\uff01",
+           "\u6211\u5728\u8fd9\u513f\u5462\uff0c\u4f60\u8bf4\uff01", "\u5728\u5462\uff0c\u60f3\u542c\u70b9\u4ec0\u4e48\uff1f"],
+    # wo zai ne! / zai de, ni shuo ba! / wo zai, xiang ting shenme? / lai la, ni shuo! /
+    # wo zai zher ne, ni shuo! / zai ne, xiang ting dian shenme?
+    "en": ["Yes, I'm here!", "Hi! What's up?", "I'm listening!", "Here I am, go ahead!",
+           "Yes? What shall I play?", "Hi there, I'm listening!"],
 }
-# Short lines hide their mood, so greetings are said with feeling: an ElevenLabs audio tag, less steady than
-# replies, with some style exaggeration, and a touch faster. Replies keep the defaults.
-GREETING_TAG = "[excited] "
-GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.3, "style": 0.4, "speed": 1.1}
+# Greetings sound a little brighter than replies (less steady, a little style, a touch faster), not excited.
+# An ElevenLabs audio tag such as "[excited] " makes them much livelier.
+GREETING_TAG = ""
+GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.4, "style": 0.2, "speed": 1.05}
 # Silero voice activity detection tells speech from silence, the piano, and beeps.
 VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 GO_ON_FRAMES = 8  # after the wake word, up to 0.64 s to tell whether you go straight on with the request
