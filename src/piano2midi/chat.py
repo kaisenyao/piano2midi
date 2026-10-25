@@ -58,6 +58,10 @@ title empty and the video's own title is used. Then report the MIDI path, note c
 Only ask a question when the request is genuinely ambiguous. If the user is vague (for example "a Chopin
 nocturne"), pick a well-known piece and say which. If the user gives a local audio file path, use
 transcribe_local. Use update_recording to add composer, performer, aliases (names in other languages) or tags.
+
+When the user wants to hear a piece ("play", "listen", or the same in another language), first make sure it is in
+the library (steps above), then call play with its id and say what is playing. Playback goes to Pianoteq over MIDI
+and runs in the background. Call stop when the user asks to stop. If play fails, explain the error.
 Never invent file paths, links or results: report only what the tools returned.
 Finished MIDI files are saved in "{MIDI_DIR}"."""
 
@@ -87,6 +91,13 @@ TOOLS = [
          "path": {"type": "string"}, "title": {"type": "string"},
          "composer": {"type": "string"}, "performer": {"type": "string"}, "tags": {"type": "string"}},
          "required": ["path", "title"]}},
+    {"name": "play",
+     "description": "Start playing a library recording on Pianoteq (through the piano2midi MIDI output). Returns at "
+                    "once; playback continues in the background and replaces anything already playing.",
+     "parameters": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
+    {"name": "stop",
+     "description": "Stop playback.",
+     "parameters": {"type": "object", "properties": {}}},
     {"name": "update_recording",
      "description": "Update library details of a recording by id.",
      "parameters": {"type": "object", "properties": {
@@ -129,6 +140,7 @@ class Assistant:
     def __init__(self, lib: Library):
         self.lib = lib
         self.engine = None
+        self.player = None
         self.request = ""
 
     # ---- tools -------------------------------------------------------------------------------
@@ -202,6 +214,26 @@ class Assistant:
         self.lib.log_request(self.request, rec["id"])
         return {"status": "done", **_brief(rec)}
 
+    def play(self, id: int) -> dict:
+        from .play import Player
+
+        rec = self.lib.get(int(id))
+        if not rec or not rec["file_exists"]:
+            return {"error": f"no playable recording with id {id}"}
+        if self.player is None:
+            try:
+                self.player = Player()
+            except LookupError as exc:
+                return {"error": str(exc)}
+        self.player.start([(Path(rec["midi_path"]), rec["title"])])
+        print(f"  · playing \"{rec['title']}\" on {self.player.port_name}")
+        return {"status": "playing", "title": rec["title"], "output": self.player.port_name}
+
+    def stop(self) -> dict:
+        if self.player:
+            self.player.stop()
+        return {"status": "stopped"}
+
     def update_recording(self, id: int, **fields) -> dict:
         rec = self.lib.update(int(id), **fields)
         return _brief(rec) if rec else {"error": f"no recording with id {id}"}
@@ -248,7 +280,7 @@ def index_midi_folder(lib: Library) -> int:
 
 
 HELP = """Commands: /library [words]  list or search the library · /import <folder>  add MIDI files
-          /enrich  fill in composers and aliases · /new  start a new conversation · /quit"""
+          /enrich  fill in composers and aliases · /stop  stop playback · /new  start over · /quit"""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -276,11 +308,16 @@ def main(argv: list[str] | None = None) -> int:
             text = input("you> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
-            return 0
+            text = "/quit"
         if not text:
             continue
         if text in {"/quit", "/exit"}:
+            assistant.stop()
             return 0
+        if text == "/stop":
+            assistant.stop()
+            print("Stopped.")
+            continue
         if text == "/help":
             print(HELP)
             continue

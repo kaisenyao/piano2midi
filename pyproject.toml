@@ -18,6 +18,8 @@ dependencies = [
     "yt-dlp[default]",
     "openai",
     "anthropic",
+    "mido",
+    "python-rtmidi",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +29,7 @@ api = ["fastapi", "uvicorn", "python-multipart"]
 piano2midi = "piano2midi.cli:main"
 piano2midi-chat = "piano2midi.chat:main"
 piano2midi-library = "piano2midi.library:main"
+piano2midi-play = "piano2midi.play:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -156,6 +156,36 @@ MIDI files you place in `output/MIDI Files/` yourself are added when the chat st
 is kept up to date. The chat deletes its own downloads once a MIDI is saved.
 Everything under `output/` stays out of Git.
 
+## Playback
+
+piano2midi can play library pieces on Pianoteq by sending the notes and pedal
+over MIDI, as if someone were playing a MIDI keyboard. Pianoteq can run on the
+same Mac or on an iPad on the same Wi-Fi; the iPad can stay connected to a
+digital piano by USB, so the sound comes out of the piano.
+
+One-time setup for an iPad (macOS):
+
+1. Open Pianoteq on the iPad.
+2. On the Mac, open Audio MIDI Setup, choose Window > Show MIDI Studio, and
+   click the globe button to open MIDI Network Setup.
+3. Add a session under My Sessions, name it `piano2midi` and enable it.
+4. Select the iPad under Sessions and Directories and click Connect.
+5. In Pianoteq on the iPad, enable the network session as a MIDI input.
+
+To use Pianoteq on the Mac instead, enable the IAC Driver in Audio MIDI Setup,
+select it as Pianoteq's MIDI input, and add `--port IAC` (or set
+`PIANO2MIDI_PORT=IAC`).
+
+```bash
+./run.sh play someone like you    # best match in the library
+./run.sh play --all               # the whole playlist, in order
+./run.sh play --ports             # list MIDI outputs
+```
+
+In the chat, ask for a piece to be played ("play Someone Like You"); `/stop`
+stops playback. Only notes and controllers are sent, so the Pianoteq preset
+does not change. Stopping lifts all keys and the sustain pedal.
+
 ## Limits and maintenance
 
 Works best on solo piano. There is no vocal or accompaniment separation, and

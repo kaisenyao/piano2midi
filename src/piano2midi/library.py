@@ -180,16 +180,20 @@ class Library:
             self.write_playlist()
         return self.get(rec_id)
 
+    def playlist(self) -> list[dict]:
+        """Every recording whose file exists, in the order it was added."""
+        rows = (self._public(r) for r in self.db.execute("SELECT * FROM recordings ORDER BY id"))
+        return [r for r in rows if r["file_exists"]]
+
     def write_playlist(self, path: Path = PLAYLIST) -> None:
-        """Rewrite the .m3u playlist: every library file that exists, in the order it was added."""
+        """Rewrite the .m3u playlist from playlist()."""
         path.parent.mkdir(parents=True, exist_ok=True)
         folder = path.parent.resolve()
         lines = ["#EXTM3U"]
-        for r in self.db.execute("SELECT title, midi_path, duration_s FROM recordings ORDER BY id"):
+        for r in self.playlist():
             midi = Path(r["midi_path"])
-            if midi.is_file():
-                entry = midi.name if midi.parent == folder else str(midi)
-                lines += [f'#EXTINF:{round(r["duration_s"] or 0)},{r["title"]}', entry]
+            entry = midi.name if midi.parent == folder else str(midi)
+            lines += [f'#EXTINF:{round(r["duration_s"] or 0)},{r["title"]}', entry]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def search(self, query: str, limit: int = 8) -> list[dict]:
