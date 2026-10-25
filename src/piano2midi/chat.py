@@ -3,8 +3,8 @@
     ./run.sh chat
 
 The assistant looks in the local library first, then searches YouTube (YOUTUBE_API_KEY),
-hands the chosen video to the existing CSV download-and-transcribe flow, and files the
-result in output/MIDI Files and the library.
+hands the chosen video to the existing CSV download-and-transcribe flow, files the result
+in output/MIDI Files and the library, and plays it on Pianoteq over MIDI.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import inspect
+import io
 import json
 import re
 import shutil
@@ -27,43 +28,53 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 from . import youtube
 from .library import CACHE_DIR, DB_PATH, MIDI_DIR, Library, enrich, file_result, format_row
 from .pipeline import Options
+from .play import clock
 
 MAX_TOOL_ROUNDS = 8
 TASK_DIR = CACHE_DIR / "chat"
 
-INSTRUCTIONS = f"""You are the piano2midi assistant. You help the user get performance MIDI files of piano music.
-Reply in the language the user writes in. Keep replies short.
+INSTRUCTIONS = """You are the piano2midi assistant. The user asks for music; you find a good piano performance and
+play it on their piano. Talk like a friendly person at the piano, not like a program.
 
-For a request to get or play a piece:
-1. Call search_library first. If a recording clearly matches (same work; same performer if one was named) and
-   its file exists, use it: give the title and file path. Do not transcribe it again.
-2. Otherwise call search_youtube with a focused query: composer, work, catalog number, performer if named,
-   and the word "piano". Choose the best candidate yourself:
-   - prefer a real human performance by a named pianist, solo piano, a good recording, and a duration that
-     fits the work;
-   - avoid candidates whose flags or titles suggest falling-notes/Synthesia videos, MIDI renderings,
-     tutorials, easy or slowed arrangements, compilations, or a different piece;
-   - if the user named a performer, pick only that performer; if none match, say so and ask before using
-     someone else.
-   If nothing is suitable, try one refined search; if there is still nothing, explain and stop.
-3. Call transcribe_url with the chosen URL and a clean title such as
-   "Chopin - Nocturne Op.9 No.2 (Rubinstein)", plus composer, performer and a few English tags.
-4. Report the chosen video (title, channel, link) and in one sentence why, one or two candidates you skipped,
-   and the MIDI path with its note count and pedal presses.
+Language: answer in the language the user writes in. When a message mixes Chinese and English, Chinese is usually
+right. Do not force it; follow the user's habit.
 
-If the user pastes a video link (YouTube, bilibili or any other site), call transcribe_url with that link
-right away, without searching. Give a clean title only if the user said what the piece is; otherwise leave the
-title empty and the video's own title is used. Then report the MIDI path, note count and pedal presses.
+Style: one or two short, natural sentences, plain text without Markdown. Do not mention tools, YouTube, downloads,
+transcription, MIDI, note counts, ids or file paths unless the user asks how it works or where something is; then
+answer truthfully. Never pretend, for example do not say you are "learning" a piece.
 
-Only ask a question when the request is genuinely ambiguous. If the user is vague (for example "a Chopin
-nocturne"), pick a well-known piece and say which. If the user gives a local audio file path, use
-transcribe_local. Use update_recording to add composer, performer, aliases (names in other languages) or tags.
+When the user wants to hear something:
+1. Call search_library. If a recording clearly matches (same piece; same performer if one was named) and its file
+   exists, call play with its id and say in a few words what you are playing.
+2. If it is not there, write one short sentence saying you don't have it yet and will look online, which takes a
+   minute or two (for example "I don't have that one yet. Let me find a good piano performance online, it takes a
+   minute or two."), in the same response as your search_youtube call. Search with the composer, piece, catalog number, performer if named, and "piano".
+   Choose the best candidate yourself:
+   - prefer a real human performance by a named pianist, solo piano, a good recording, and a duration that fits;
+   - avoid falling-notes/Synthesia videos, MIDI renderings, tutorials, easy or slowed arrangements, compilations,
+     and different pieces (see each result's flags);
+   - for a song that is not a piano piece, a good piano cover is right;
+   - if the user named a performer, use only that performer; if there is none, say so and ask.
+   If nothing fits, try one refined search.
+3. Call transcribe_url with the chosen URL and a clean title such as "Chopin - Nocturne Op.9 No.2 (Rubinstein)",
+   plus composer, performer and a few English tags. Then call play with the new id and say whose performance it
+   is in a few words.
+4. If there is no good piano version, say so kindly and do not play something poor.
+If you are not sure which piece the user means (a misspelled or ambiguous name), ask a short question such as
+"Do you mean John Legend's All of Me?". If the request is merely vague ("a Chopin nocturne"), pick a well-known
+piece and say which. If the user pastes a video link, say it takes a minute or two, call transcribe_url with that
+link (title empty unless the user named the piece) and play it. For a local audio file path use transcribe_local
+in the same way.
 
-When the user wants to hear a piece ("play", "listen", or the same in another language), first make sure it is in
-the library (steps above), then call play with its id and say what is playing. Playback goes to Pianoteq over MIDI
-and runs in the background. Call stop when the user asks to stop. If play fails, explain the error.
-Never invent file paths, links or results: report only what the tools returned.
-Finished MIDI files are saved in "{MIDI_DIR}"."""
+Playback:
+The user may say these in any language:
+- "stop playing", "stop", "pause", "that's enough" and the like: call pause. It keeps the position.
+- "continue", "keep playing", "go on": call play without an id.
+- "start over", "from the beginning": call play without an id and with from_start true.
+- Asking for another piece replaces whatever is playing or paused. When a piece ends, playback simply stops.
+- If play reports an error, explain it simply (for example the iPad is not connected).
+Use update_recording to add composer, performer, aliases (names in other languages) or tags when useful.
+Never invent results: report only what the tools returned."""
 
 TOOLS = [
     {"name": "search_library",
@@ -92,11 +103,14 @@ TOOLS = [
          "composer": {"type": "string"}, "performer": {"type": "string"}, "tags": {"type": "string"}},
          "required": ["path", "title"]}},
     {"name": "play",
-     "description": "Start playing a library recording on Pianoteq (through the piano2midi MIDI output). Returns at "
-                    "once; playback continues in the background and replaces anything already playing.",
-     "parameters": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
-    {"name": "stop",
-     "description": "Stop playback.",
+     "description": "Play on the user's piano (Pianoteq through MIDI); returns at once and plays in the background. "
+                    "With an id: start that library recording from the beginning, replacing anything else. "
+                    "Without an id: continue the current piece from where it was paused, or from the beginning "
+                    "when from_start is true or it had stopped.",
+     "parameters": {"type": "object", "properties": {
+         "id": {"type": "integer"}, "from_start": {"type": "boolean"}}}},
+    {"name": "pause",
+     "description": "Pause playback and keep the position, so play without an id continues from there.",
      "parameters": {"type": "object", "properties": {}}},
     {"name": "update_recording",
      "description": "Update library details of a recording by id.",
@@ -145,11 +159,11 @@ class Assistant:
 
     # ---- tools -------------------------------------------------------------------------------
     def search_library(self, query: str) -> dict:
-        print(f"  · searching the library: {query}")
+        print(f"  · library: {query}", flush=True)
         return {"results": [_brief(r) for r in self.lib.search(query)]}
 
     def search_youtube(self, query: str, max_results: int = 8) -> dict:
-        print(f"  · searching YouTube: {query}")
+        print(f"  · searching online: {query}", flush=True)
         results = youtube.search(query, max_results)
         for r in results:
             known = self.lib.by_source(r["url"])
@@ -175,8 +189,9 @@ class Assistant:
         if not rows:
             rows = [{c: "" for c in fields} | {"url": url, "name": safe_name(title) if title else ""}]
         save_tasks(csv_path, fields, rows)
-        print(f"  · downloading and transcribing {title or url} (usually 1–3 minutes)…", flush=True)
-        run_csv(csv_path, work, Options())
+        print(f"  · getting {title or url} ready (1–3 minutes)…", flush=True)
+        with contextlib.redirect_stdout(io.StringIO()):  # the batch runner's progress is noise here
+            run_csv(csv_path, work, Options())
         _, rows = read_tasks(csv_path)
         row = rows[0]
         if row["status"] != "done":
@@ -202,7 +217,7 @@ class Assistant:
         known = self.lib.by_source(str(src.resolve()))
         if known and known["file_exists"]:
             return {"status": "already in library", **_brief(known)}
-        print(f"  · transcribing {src.name}…", flush=True)
+        print(f"  · getting {src.name} ready…", flush=True)
         if self.engine is None:
             from .engine import TranskunEngine
 
@@ -214,24 +229,46 @@ class Assistant:
         self.lib.log_request(self.request, rec["id"])
         return {"status": "done", **_brief(rec)}
 
-    def play(self, id: int) -> dict:
+    def _get_player(self):
         from .play import Player
 
-        rec = self.lib.get(int(id))
-        if not rec or not rec["file_exists"]:
-            return {"error": f"no playable recording with id {id}"}
         if self.player is None:
-            try:
-                self.player = Player()
-            except LookupError as exc:
-                return {"error": str(exc)}
-        self.player.start([(Path(rec["midi_path"]), rec["title"])])
-        print(f"  · playing \"{rec['title']}\" on {self.player.port_name}")
-        return {"status": "playing", "title": rec["title"], "output": self.player.port_name}
+            self.player = Player()  # LookupError when the MIDI output is missing
+        return self.player
+
+    def play(self, id: int | None = None, from_start: bool = False) -> dict:
+        try:
+            player = self._get_player()
+        except LookupError as exc:
+            return {"error": str(exc)}
+        if id is not None:
+            rec = self.lib.get(int(id))
+            if not rec or not rec["file_exists"]:
+                return {"error": f"no playable recording with id {id}"}
+            player.start([(Path(rec["midi_path"]), rec["title"])])
+        elif player.current is None:
+            return {"error": "nothing has been played yet"}
+        elif from_start or player.state != "paused":
+            player.start([player.current])
+        else:
+            player.resume()
+        print(f"  ▶ {player.current[1]}  {clock(player.position)}", flush=True)
+        return {"status": "playing", "title": player.current[1], "from": clock(player.position)}
+
+    def pause(self) -> dict:
+        player = self.player
+        if not player or player.current is None:
+            return {"status": "nothing is playing"}
+        if player.state != "playing":
+            return {"status": player.state, "title": player.current[1]}
+        player.pause()
+        print(f"  ⏸ {player.current[1]}  {clock(player.position)}", flush=True)
+        return {"status": "paused", "title": player.current[1], "at": clock(player.position)}
 
     def stop(self) -> dict:
-        if self.player:
+        if self.player and self.player.current is not None:
             self.player.stop()
+            print(f"  ⏹ {self.player.current[1]}", flush=True)
         return {"status": "stopped"}
 
     def update_recording(self, id: int, **fields) -> dict:
@@ -260,9 +297,11 @@ class Assistant:
         for _ in range(MAX_TOOL_ROUNDS):
             if not reply.tool_calls:
                 break
+            if reply.text.strip():  # say "one moment" before a long step, not after it
+                print(f"\nassistant> {reply.text.strip()}\n", flush=True)
             results = [(c, self.run_tool(c.name, c.arguments)) for c in reply.tool_calls]
             reply = chat.send_tool_results(results)
-        return reply.text.strip() or "(no reply)"
+        return reply.text.strip()
 
 
 def index_midi_folder(lib: Library) -> int:
@@ -279,8 +318,8 @@ def index_midi_folder(lib: Library) -> int:
     return added
 
 
-HELP = """Commands: /library [words]  list or search the library · /import <folder>  add MIDI files
-          /enrich  fill in composers and aliases · /stop  stop playback · /new  start over · /quit"""
+HELP = """Playback: /play ▶ continue or start · /pause ⏸ · /stop ⏹ back to the beginning
+Library: /library [words] · /import <folder> · /enrich      Chat: /new start over · /quit"""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -306,17 +345,22 @@ def main(argv: list[str] | None = None) -> int:
     while True:
         try:
             text = input("you> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
+        except EOFError:
             text = "/quit"
+        except KeyboardInterrupt:  # Control+C must not end the session by accident
+            print("\n(type /quit to exit)")
+            continue
         if not text:
             continue
         if text in {"/quit", "/exit"}:
             assistant.stop()
             return 0
-        if text == "/stop":
-            assistant.stop()
-            print("Stopped.")
+        if text in {"/play", "/pause", "/stop"}:
+            result = getattr(assistant, text[1:])()
+            if "error" in result:
+                print(result["error"])
+            elif text == "/pause" and result["status"] != "paused":
+                print("Nothing is playing.")
             continue
         if text == "/help":
             print(HELP)
@@ -347,7 +391,8 @@ def main(argv: list[str] | None = None) -> int:
             chat.reset()
             print(f"Model error: {exc}\n(started a new conversation)")
             continue
-        print(f"\nassistant> {answer}\n")
+        if answer:
+            print(f"\nassistant> {answer}\n")
 
 
 if __name__ == "__main__":

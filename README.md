@@ -110,11 +110,12 @@ ensures the sustain pedal is released at the end. Use `--legato`,
 
 ## Chat
 
-Ask for a piece in plain language. The assistant checks your local library first.
-If nothing matches, it searches YouTube, picks a real performance (it avoids
-falling-notes videos, tutorials and easy arrangements), runs it through the CSV
-flow above, and saves the MIDI in `output/MIDI Files/`. It tells you which video
-it chose and why.
+Ask for a piece in plain language, in English, Chinese or another language; the
+assistant answers in yours. It checks your local library first. If nothing matches,
+it searches YouTube, picks a real performance (it avoids falling-notes videos,
+tutorials and easy arrangements), runs it through the CSV flow above, saves the MIDI
+in `output/MIDI Files/` and plays it (see [Playback](#playback)). Ask how it chose
+or where a file is, and it tells you.
 
 Set the keys once. They stay in your shell profile, never in the repository:
 
@@ -130,14 +131,14 @@ Then run:
 ./run.sh chat
 ```
 
-Example requests: "Play Chopin's Nocturne Op. 9 No. 2 by Rubinstein",
-"something gentle by Debussy", "transcribe ~/Music/my-recording.m4a".
+Example requests: "I'd like to hear Chopin's Nocturne Op. 9 No. 2 by Rubinstein",
+"something gentle by Debussy", "play ~/Music/my-recording.m4a".
 You can also paste a video link (YouTube, bilibili or another site yt-dlp supports)
-to transcribe it directly, without a search. For a long list of links, use
+to use that recording directly, without a search. For a long list of links, use
 `tasks.csv` instead.
 In the chat, `/library` lists or searches the library, `/import <folder>` adds MIDI
 files, `/enrich` fills in composers and other-language titles, `/new` starts over
-and `/quit` exits.
+and `/quit` exits. Control+C does not end the chat.
 
 The default model is OpenAI `gpt-6-luna`, or Claude Haiku 5.5 when only
 `ANTHROPIC_API_KEY` is set. Choose another with, for example,
@@ -182,9 +183,21 @@ select it as Pianoteq's MIDI input, and add `--port IAC` (or set
 ./run.sh play --ports             # list MIDI outputs
 ```
 
-In the chat, ask for a piece to be played ("play Someone Like You"); `/stop`
-stops playback. Only notes and controllers are sent, so the Pianoteq preset
-does not change. Stopping lifts all keys and the sustain pedal.
+In the chat, playback works like a media player:
+
+| Command | Button | What it does |
+|---|---|---|
+| `/play` | ▶ | continue after a pause, or start the current piece again |
+| `/pause` | ⏸ | pause and keep the position |
+| `/stop` | ⏹ | stop and go back to the beginning |
+
+Plain language works too: "stop playing" pauses, "continue" picks up where it
+paused, "start over" plays from the beginning, and asking for another piece
+replaces the current one. When a piece ends, playback stops.
+
+Only notes and controllers are sent, so the Pianoteq preset does not change.
+Pausing or stopping lifts all keys and the sustain pedal; continuing puts the
+pedal back where it was.
 
 ## Limits and maintenance
 

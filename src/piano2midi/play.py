@@ -40,8 +40,15 @@ def find_port(wanted: str | None = None) -> str:
                       "Check that the network MIDI session is on and the iPad is connected.")
 
 
+def clock(seconds: float) -> str:
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+
 class Player:
-    """Sends MIDI files to one output port, in the foreground (play) or in a background thread (start)."""
+    """Sends MIDI files to one output port, in the foreground (play) or in a background thread (start).
+
+    Like a media player: pause keeps the position, resume continues from it, stop goes back to the beginning.
+    """
 
     def __init__(self, port_name: str | None = None, port=None):
         if port is None:
@@ -50,55 +57,100 @@ class Player:
             port_name = find_port(port_name)
             port = mido.open_output(port_name)
         self.port, self.port_name = port, port_name or "test"
-        self.now_playing: str | None = None
+        self.current: tuple[Path, str] | None = None  # the piece playing, paused or last played
+        self.state = "stopped"  # playing, paused or stopped
+        self._offset = 0.0  # seconds into the current piece while paused
+        self._t0: float | None = None  # perf_counter() at 0:00 of the current piece
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._down: set[tuple[int, int]] = set()
 
-    def play(self, items: list[tuple[Path, str]], on_start=None) -> None:
-        """Play (path, title) items in order; returns when done or stopped."""
-        self._stop.clear()
+    @property
+    def position(self) -> float:
+        if self.state == "playing" and self._t0 is not None:
+            return max(0.0, time.perf_counter() - self._t0)
+        return self._offset
+
+    @property
+    def now_playing(self) -> str | None:
+        return self.current[1] if self.current and self.state == "playing" else None
+
+    def play(self, items: list[tuple[Path, str]], from_s: float = 0.0, on_start=None) -> None:
+        """Play (path, title) items in order, the first from from_s; returns when done, paused or stopped."""
         try:
             for i, (path, title) in enumerate(items):
                 if i and self._stop.wait(GAP_S):
-                    break
+                    return
                 if self._stop.is_set():
-                    break
-                self.now_playing = title
+                    return
+                self.current, self.state = (path, title), "playing"
                 if on_start:
                     on_start(path, title)
-                self._play_file(path)
+                if not self._play_file(path, from_s if i == 0 else 0.0):
+                    return  # pause() or stop() sets the state
+            self.state, self._offset = "stopped", 0.0
         finally:
             self.release()
-            self.now_playing = None
 
-    def start(self, items: list[tuple[Path, str]]) -> None:
-        self.stop()
-        self._thread = threading.Thread(target=self.play, args=(items,), daemon=True)
+    def start(self, items: list[tuple[Path, str]], from_s: float = 0.0) -> None:
+        self._halt()
+        self._stop.clear()  # here, not in the thread, so an immediate pause() cannot be lost
+        self.current, self.state, self._offset = items[0], "playing", from_s
+        self._t0 = time.perf_counter() - from_s
+        self._thread = threading.Thread(target=self.play, args=(items, from_s), daemon=True)
         self._thread.start()
 
+    def pause(self) -> None:
+        if self.state == "playing":
+            position = self.position
+            self._halt()
+            self.state, self._offset = "paused", position
+
+    def resume(self) -> None:
+        if self.current is not None:
+            self.start([self.current], self._offset if self.state == "paused" else 0.0)
+
     def stop(self) -> None:
+        self._halt()
+        self.state, self._offset = "stopped", 0.0
+
+    def _halt(self) -> None:
         self._stop.set()
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=2)
         self._thread = None
 
-    def _play_file(self, path: Path) -> None:
+    def _play_file(self, path: Path, from_s: float = 0.0) -> bool:
+        """Send one file in real time from from_s seconds. True when it reached the end."""
         import mido
 
-        start, at = time.perf_counter(), 0.0
+        pedal: dict[int, int] = {}  # sustain value per channel at from_s, restored before continuing
+        self._t0 = time.perf_counter() - from_s
+        at, restored = 0.0, from_s <= 0
         for msg in mido.MidiFile(path):  # merged tracks, msg.time in seconds since the previous message
             at += msg.time
             if msg.is_meta or msg.type not in SENT:
                 continue
-            delay = start + at - time.perf_counter()
+            if at < from_s:
+                if msg.type == "control_change" and msg.control == 64:
+                    pedal[msg.channel] = msg.value
+                continue
+            if not restored:
+                for channel, value in pedal.items():
+                    if value >= 64:
+                        self.port.send(mido.Message("control_change", channel=channel, control=64, value=value))
+                restored = True
+            delay = self._t0 + at - time.perf_counter()
             if delay > 0 and self._stop.wait(delay):
-                return
+                return False
+            if self._stop.is_set():
+                return False
             self.port.send(msg)
             if msg.type == "note_on" and msg.velocity > 0:
                 self._down.add((msg.channel, msg.note))
             elif msg.type in {"note_on", "note_off"}:
                 self._down.discard((msg.channel, msg.note))
+        return True
 
     def release(self) -> None:
         """Lift every key that is still down and the sustain pedal."""
@@ -121,10 +173,6 @@ def resolve(lib: Library, words: list[str]) -> list[tuple[Path, str]]:
         if rec["file_exists"]:
             return [(Path(rec["midi_path"]), rec["title"])]
     return []
-
-
-def _clock(seconds: float) -> str:
-    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     def announce(path: Path, title: str) -> None:
         import mido
 
-        print(f"▶ {title} ({_clock(mido.MidiFile(path).length)})", flush=True)
+        print(f"▶ {title} ({clock(mido.MidiFile(path).length)})", flush=True)
 
     print(f"Playing on {player.port_name}. Ctrl+C to stop.")
     try:
