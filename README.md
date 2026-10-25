@@ -215,10 +215,12 @@ uv pip install --python .venv/bin/python -e ".[voice]"
 ./run.sh voice
 ```
 
-Say "Hey Jasmine" (or its Chinese name, Xiaoming Tongxue) and ask for a piece, in
-one breath or after the beep. While music plays, wait for the beep: the piano first
-finishes the notes already on their way. Anything that is playing pauses while you
-speak and continues afterwards, unless you asked to stop or for something else. "Stop", "continue"
+Say "Hey Jasmine" (or its Chinese name, Xiaoming Tongxue) and ask for a piece. Say
+it in one breath, or pause after the name: she answers ("Yes, I'm here!", in Chinese
+if you used the Chinese name) and then listens. While music plays, wait for her
+answer: the piano first finishes the notes already on their way. Anything that is
+playing pauses while you speak and continues afterwards, unless you asked to stop or
+for something else. "Stop", "continue"
 and "start over" (also in Chinese) act at once; everything else goes to the same
 assistant as the chat.
 
@@ -238,7 +240,9 @@ assistant as the chat.
   `PIANO2MIDI_VOICE_ID` (from My Voices on elevenlabs.io; voices from the shared
   library need paid credits). The default model is `eleven_v4_turbo`; set
   `PIANO2MIDI_TTS_MODEL=eleven_v4` for the richer, slower one. Without these
-  settings the macOS voice is used.
+  settings the macOS voice is used. Her greetings are made once with this voice
+  and kept in `output/.cache/voice`; change them in `GREETINGS` in `voice.py`.
+  Without ElevenLabs she beeps instead.
 
 The first run asks for microphone access.
 

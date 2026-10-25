@@ -6,17 +6,19 @@ with ears and a voice.
 The wake words are heard on this computer by sherpa-onnx keyword spotting, which takes any name without
 training; set them with PIANO2MIDI_WAKE_WORDS (comma-separated). Speech recognition uses OpenAI gpt-transcribe
 (OPENAI_API_KEY). Replies are spoken by ElevenLabs (ELEVENLABS_API_KEY and PIANO2MIDI_VOICE_ID), or by the
-macOS voice without them. Add --debug to see which wake word was heard.
+macOS voice without them. Pause after the name and she says she is listening; or say the name and the request
+in one breath. Add --debug to see which wake word was heard and what she answered.
 Install the extras once: uv pip install --python .venv/bin/python -e ".[voice]"
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
+import random
 import re
-import statistics
 import subprocess
 import sys
 import tarfile
@@ -57,6 +59,15 @@ VOICE_ID = os.environ.get("PIANO2MIDI_VOICE_ID", "")
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice}/stream?output_format=pcm_24000"
 # The ElevenLabs defaults, as on its text-to-speech page: stability 0.5, similarity 0.75, no style exaggeration.
 VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use_speaker_boost": True, "speed": 1.0}
+# What she says when woken and you pause, in the language of the name you used; made once with the ElevenLabs
+# voice and kept in output/.cache/voice. Without ElevenLabs she beeps instead.
+GREETINGS = {
+    "zh": ["\u6211\u5728\uff01", "\u5728\u5462\uff01", "\u6211\u5728\u7684\uff0c\u600e\u4e48\u5566\uff1f", "\u4f60\u8bf4\u5440\uff01", "\u6765\u5566\uff01",
+           "\u5728\u7684\u5728\u7684\uff01"],
+    # wo zai! / zai ne! / wo zai de, zenme la? / ni shuo ya! / lai la! / zai de zai de!
+    "en": ["Yes, I'm here!", "What's up?", "I'm listening!", "Yes?", "Hi there!", "Here!"],
+}
+GO_ON_FRAMES = 4  # after the wake word, 0.32 s to tell whether you go straight on with the request
 START_TIMEOUT_S = 6.0  # wait this long for speech to begin after the wake word
 END_SILENCE_S = 0.8  # this much silence ends the request
 MAX_REQUEST_S = 15.0
@@ -275,15 +286,22 @@ class WakeWord:
         self.stream = self.spotter.create_stream()
 
 
-def record(mic, noise_rms: float) -> np.ndarray | None:
-    """Record one request: wait for speech, stop after a short silence. Float32 at 16 kHz, or None.
+def speech_level(noise_rms: float) -> float:
+    """Loudness above which a frame counts as speech."""
+    return min(max(3 * noise_rms, 300.0), 1500.0)
+
+
+def record(mic, noise_rms: float, first: list[np.ndarray] | None = None) -> np.ndarray | None:
+    """Record one request, starting with the frames in first: wait for speech, stop after a short silence.
+    Float32 at 16 kHz, or None.
 
     Speech counts as begun after 0.24 s of sound, so the beep or a click does not start the request.
     """
-    threshold = min(max(3 * noise_rms, 300.0), 1500.0)
+    threshold = speech_level(noise_rms)
+    pending = list(first or [])
     frames, loud, started, silent, elapsed = [], 0, False, 0.0, 0.0
     while elapsed < MAX_REQUEST_S:
-        frame = mic.read()
+        frame = pending.pop(0) if pending else mic.read()
         elapsed += FRAME_S
         frames.append(frame)
         if rms(frame) > threshold:
@@ -352,13 +370,38 @@ class Speaker:
         voice = ["-v", "Tingting"] if re.search(r"[\u3400-\u9fff]", text) else []
         subprocess.run(["say", *voice, text], check=False)
 
+    def _request(self, text: str) -> urllib.request.Request:
+        body = {"text": text, "model_id": TTS_MODEL, "voice_settings": VOICE_SETTINGS}
+        return urllib.request.Request(ELEVENLABS_URL.format(voice=VOICE_ID), data=json.dumps(body).encode(),
+                                      headers={"xi-api-key": self.key, "Content-Type": "application/json"})
+
+    def clip_path(self, text: str) -> Path:
+        from .library import CACHE_DIR
+
+        key = hashlib.sha1(json.dumps([VOICE_ID, TTS_MODEL, VOICE_SETTINGS, text]).encode()).hexdigest()[:16]
+        return CACHE_DIR / "voice" / f"{key}.wav"
+
+    def clip(self, text: str) -> np.ndarray:
+        """The voice saying text as 24 kHz audio, made once and then read from output/.cache/voice."""
+        path = self.clip_path(text)
+        if not path.is_file():
+            with urllib.request.urlopen(self._request(text), timeout=30) as resp:
+                pcm = resp.read()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            part = path.with_suffix(".part")
+            with wave.open(str(part), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(24000)
+                w.writeframes(pcm[: len(pcm) // 2 * 2])
+            part.replace(path)
+        with wave.open(str(path)) as w:
+            return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+
     def _eleven(self, text: str) -> None:
         import sounddevice as sd
 
-        request = urllib.request.Request(
-            ELEVENLABS_URL.format(voice=VOICE_ID), data=json.dumps({"text": text, "model_id": TTS_MODEL, "voice_settings": VOICE_SETTINGS}).encode(),
-            headers={"xi-api-key": self.key, "Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=30) as resp:
+        with urllib.request.urlopen(self._request(text), timeout=30) as resp:
             with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as out:
                 rest = b""
                 while chunk := resp.read(4800):  # 0.1 s of audio
@@ -375,6 +418,41 @@ def beep(freq: float = 880.0, seconds: float = 0.12) -> None:
     t = np.arange(int(24000 * seconds)) / 24000
     tone = 0.2 * np.sin(2 * np.pi * freq * t) * np.hanning(t.size)
     sd.play(tone.astype(np.float32), 24000)
+
+
+class Greeter:
+    """Answers the wake word with a short "I'm here" in the language of the name used, or a beep."""
+
+    def __init__(self, speaker: Speaker):
+        self.clips: dict[str, list[tuple[str, np.ndarray]]] = {lang: [] for lang in GREETINGS}
+        self.last = ""
+        if not speaker.cloud:
+            return
+        texts = [(lang, t) for lang, lines in GREETINGS.items() for t in lines]
+        if any(not speaker.clip_path(t).is_file() for _, t in texts):
+            print("Preparing her greetings (once)…", flush=True)
+        for lang, text in texts:
+            try:
+                self.clips[lang].append((text, speaker.clip(text)))
+            except Exception as exc:  # that one is left out; a beep stands in if none are left
+                print(f"  (could not prepare \"{text}\": {exc})")
+                if isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 402, 403):
+                    break  # key, payment or permission: the others would fail too
+
+    def __call__(self, wake_word: str) -> str:
+        """Say a greeting (or beep) and return when it is over; returns what was said."""
+        import sounddevice as sd
+
+        lang = "zh" if re.search(r"[\u4e00-\u9fff]", wake_word) else "en"
+        choices = [c for c in self.clips.get(lang, []) if c[0] != self.last] or self.clips.get(lang, [])
+        if not choices:
+            beep()
+            return "(beep)"
+        text, clip = random.choice(choices)
+        self.last = text
+        sd.play(clip, 24000)
+        sd.wait()
+        return text
 
 
 def handle_command(assistant, action: str) -> bool:
@@ -406,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print("Loading speech recognition and the wake word…", flush=True)
         stt, wake, mic = Transcriber(), WakeWord(), Microphone()
+        greet = Greeter(speaker)
     except ImportError as exc:
         print(f"Voice needs the extras: uv pip install --python .venv/bin/python -e \".[voice]\" ({exc})",
               file=sys.stderr)
@@ -417,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {speaker.label}")
     said = " or ".join(f'"{w}"' for w in wake.words)
     print(f"Say {said}, then your request. Control+C quits.\n", flush=True)
-    noise: deque[float] = deque(maxlen=25)  # about two seconds of background level, measured while not playing
+    noise: deque[float] = deque(maxlen=50)  # four seconds of loudness, measured while not playing
     try:
         while True:
             frame = mic.read()
@@ -426,18 +505,26 @@ def main(argv: list[str] | None = None) -> int:
             word = wake.heard(frame)
             if not word:
                 continue
-            if debug:
-                print(f"  (heard {word})", flush=True)
             player = assistant.player
             was_playing = player is not None and player.state == "playing"
             if was_playing:
                 player.pause()  # so the piano does not drown out the request
-                time.sleep(player.sounding_for + 0.2)  # the notes already sent, and their decay
-                mic.drain()  # piano, not the request: wait for the beep while music plays
-            # Otherwise keep listening straight on, so "<name>, play ..." can be said in one breath.
             assistant.touched_playback = False
-            beep()
-            audio = record(mic, statistics.median(noise) if noise else 0.0)
+            background = float(np.percentile(noise, 20)) if noise else 0.0  # the quiet between words
+            first: list[np.ndarray] = []
+            if player is None or player.sounding_for == 0:  # quiet: did you go straight on with the request?
+                first = [mic.read() for _ in range(GO_ON_FRAMES)]
+            if sum(rms(f) > speech_level(background) for f in first) >= 2:
+                said = "nothing, you went on"  # "<name>, play ..." in one breath: keep listening
+            else:
+                said = greet(word)
+                if player is not None and player.sounding_for:
+                    time.sleep(player.sounding_for + 0.2)  # the notes already sent, and their decay
+                mic.drain()  # her greeting or the piano, not the request
+                first = []
+            if debug:
+                print(f"  (heard {word}; said {said})", flush=True)
+            audio = record(mic, background, first)
             if audio is None and debug:
                 print("  (no speech after the beep)", flush=True)
             try:
