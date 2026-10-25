@@ -9,11 +9,14 @@ result in output/MIDI Files and the library.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import inspect
 import json
 import re
+import shutil
 import sys
+import tempfile
 import warnings
 from pathlib import Path
 
@@ -122,22 +125,28 @@ class Assistant:
         known = self.lib.by_source(url)
         if known and known["file_exists"]:
             return {"status": "already in library", **_brief(known)}
-        TASK_DIR.mkdir(parents=True, exist_ok=True)
-        csv_path = TASK_DIR / f"{hashlib.sha256(url.encode()).hexdigest()[:16]}.csv"
+        # Each request runs the existing CSV flow in its own work folder. The folder is deleted once the
+        # MIDI is in the library; after a failure it stays, so a retry reuses the downloaded audio.
+        work = TASK_DIR / hashlib.sha256(url.encode()).hexdigest()[:16]
+        work.mkdir(parents=True, exist_ok=True)
+        csv_path = work / "task.csv"
         fields, rows = read_tasks(csv_path) if csv_path.exists() else (list(COLUMNS), [])
         if not rows:
             rows = [{c: "" for c in fields} | {"url": url, "name": safe_name(title)}]
         save_tasks(csv_path, fields, rows)
         print(f"  · downloading and transcribing \"{title}\" (usually 1–3 minutes)…", flush=True)
-        run_csv(csv_path, OUTPUT_DIR, Options())
+        run_csv(csv_path, work, Options())
         _, rows = read_tasks(csv_path)
         row = rows[0]
         if row["status"] != "done":
             return {"status": "failed", "error": row["error"] or "unknown error"}
-        produced = (csv_path.parent / row["midi_path"]).resolve()
+        produced = (work / row["midi_path"]).resolve()
         rec = self.lib.add(place_midi(produced, title), title, composer=composer, performer=performer,
                            tags=tags, source_type="youtube", source_url=url)
         self.lib.log_request(self.request, rec["id"])
+        shutil.rmtree(work, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            TASK_DIR.rmdir()  # only succeeds when no other task folder is left
         return {"status": "done", **_brief(rec)}
 
     def transcribe_local(self, path: str, title: str, composer: str = "", performer: str = "",
@@ -156,9 +165,11 @@ class Assistant:
             from .engine import TranskunEngine
 
             self.engine = TranskunEngine()
-        info = convert_file(self.engine, src, OUTPUT_DIR, Options(), output_name=safe_name(title))
-        rec = self.lib.add(place_midi(Path(info["files"]["midi"]), title), title, composer=composer,
-                           performer=performer, tags=tags, source_type="local", source_url=str(src.resolve()))
+        with tempfile.TemporaryDirectory() as tmp:  # only the final MIDI is kept
+            info = convert_file(self.engine, src, Path(tmp), Options(), output_name=safe_name(title))
+            placed = place_midi(Path(info["files"]["midi"]), title)
+        rec = self.lib.add(placed, title, composer=composer, performer=performer, tags=tags,
+                           source_type="local", source_url=str(src.resolve()))
         self.lib.log_request(self.request, rec["id"])
         return {"status": "done", **_brief(rec)}
 
@@ -216,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
 
     lib = Library()
     index_midi_folder(lib)
+    lib.write_playlist()  # also drops files that were deleted by hand
     try:
         chat, label = make_chat(INSTRUCTIONS, TOOLS)
     except Exception as exc:

@@ -21,6 +21,7 @@ import pretty_midi
 
 OUTPUT_DIR = Path("output")
 MIDI_DIR = OUTPUT_DIR / "MIDI Files"
+PLAYLIST = MIDI_DIR / "playlist.m3u"
 DB_PATH = OUTPUT_DIR / "library.db"
 
 FIELDS = ("title", "composer", "performer", "aliases", "tags")
@@ -149,6 +150,7 @@ class Library:
              stats["notes"], stats["velocity_min"], stats["velocity_max"], stats["pedal_presses"],
              stats["duration_s"], _now()))
         self.db.commit()
+        self.write_playlist()
         row = self.db.execute("SELECT * FROM recordings WHERE midi_path = ?", (str(midi_path),)).fetchone()
         return self._public(row)
 
@@ -158,7 +160,20 @@ class Library:
             assignments = ", ".join(f"{k} = ?" for k in fields)
             self.db.execute(f"UPDATE recordings SET {assignments} WHERE id = ?", (*fields.values(), rec_id))
             self.db.commit()
+            self.write_playlist()
         return self.get(rec_id)
+
+    def write_playlist(self, path: Path = PLAYLIST) -> None:
+        """Rewrite the .m3u playlist: every library file that exists, in the order it was added."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        folder = path.parent.resolve()
+        lines = ["#EXTM3U"]
+        for r in self.db.execute("SELECT title, midi_path, duration_s FROM recordings ORDER BY id"):
+            midi = Path(r["midi_path"])
+            if midi.is_file():
+                entry = midi.name if midi.parent == folder else str(midi)
+                lines += [f'#EXTINF:{round(r["duration_s"] or 0)},{r["title"]}', entry]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def search(self, query: str, limit: int = 8) -> list[dict]:
         wanted = _terms(query)

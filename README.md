@@ -145,7 +145,9 @@ The library is a single file, `output/library.db`. Manage it from the terminal:
 ```
 
 MIDI files you place in `output/MIDI Files/` yourself are added when the chat starts.
-Everything under `output/` stays out of Git.
+`output/MIDI Files/playlist.m3u` lists the whole library in the order it was added and
+is kept up to date. Downloads and other intermediate files are deleted once a MIDI is
+saved. Everything under `output/` stays out of Git.
 
 ## Limits and maintenance
 
