@@ -65,7 +65,7 @@ VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use
 GREETINGS = {
     "zh": ["\u8bf6\uff0c\u6211\u5728\u5462\uff01", "\u6765\u5566\uff5e\u60f3\u542c\u70b9\u4ec0\u4e48\u5440\uff1f", "\u55ef\u55ef\uff0c\u4f60\u8bf4\uff5e"],
     # ei, wo zai ne! / lai la, xiang ting dian shenme ya? / en en, ni shuo
-    "en": ["Hi! I'm here.", "Sure, I'm listening!"],
+    "en": ["Hi! I'm here.", "Sure, I'm listening!", "Mm-hmm, go ahead!"],
 }
 # How the greetings are said, picked by ear by the owner: freer than replies, with some character, quick.
 GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.25, "style": 0.4, "speed": 1.15}
