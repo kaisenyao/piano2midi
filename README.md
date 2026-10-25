@@ -13,23 +13,6 @@
   <sub>Glenn Gould's rehearsal of Bach's Partita No. 2, transcribed by piano2midi and played back in Pianoteq 9 (20-second excerpt).</sub>
 </p>
 
-<p align="center">
-  <a href="#demo">Demo</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#what-piano2midi-changes">What it changes</a> ·
-  <a href="#http-api">HTTP API</a> ·
-  <a href="#limits">Limits</a>
-</p>
-
-## Why piano2midi
-
-- **Keeps the performance.** Every note keeps its real onset, release and velocity. Nothing is quantized, so rubato, voicing and articulation survive.
-- **Sustain pedal included.** Pedal presses come out as standard CC64 events.
-- **Batch friendly.** Drop recordings into a folder and convert them all at once. Files that are already done are skipped.
-- **Runs on your machine.** A CPU is enough. No account, no API key. An HTTP API and a Dockerfile are included for servers.
-
-Transcription is done by [Transkun](https://github.com/Yujia-Yan/Transkun) (Yan & Duan), a piano-specific model that predicts notes, velocities and pedals. piano2midi adds audio decoding, a small conservative clean-up, batch processing, a command line tool and an HTTP API.
-
 ## Demo
 
 **Glenn Gould: J.S. Bach, Partita No. 2 in C minor, BWV 826 (rehearsal recording)**
@@ -59,140 +42,77 @@ Transcription is done by [Transkun](https://github.com/Yujia-Yan/Transkun) (Yan 
 
 Gould plays this music almost without pedal, and the transcription reflects that. Download the MIDI: [`demo/gould-partita-2-rehearsal.mid`](demo/gould-partita-2-rehearsal.mid)
 
-## Quick start
+## 日常使用
 
-**Requirements:** macOS or Linux, Python 3.10+ (or [uv](https://github.com/astral-sh/uv)), about 1–2 GB of disk space.
-
-1. Install once:
-
-   ```bash
-   git clone https://github.com/kaisenyao/piano2midi.git
-   cd piano2midi
-   ./setup.sh
-   ```
-
-2. Put your recordings (mp3, m4a, wav, flac) in `input/`.
-3. Double-click **Convert.command** (macOS) or run `./run.sh`.
-4. Play the MIDI files from `output/`.
-
-To convert a single file, run `./run.sh path/to/song.mp3`. Already converted files are skipped; add `--overwrite` to convert them again.
-
-```text
-output/
-  song.mid               the file to play
-  extras/song.raw.mid    untouched model output, for comparison
-  extras/song.json       duration, note count, velocity range, pedal count, timing
-```
-
-## Batch video URLs from a CSV
-
-1. Copy `tasks.example.csv` to `tasks.csv` in the repository root. Replace its
-   example with your video URLs. Only `url` is required; video titles are used
-   automatically. Add an optional `name` column to choose your own filenames.
+1. 在 `tasks.csv` 填写视频链接，每行一个，只保留 `url` 表头也可以：
 
    ```csv
    url
-   https://www.youtube.com/watch?v=WqwZC-yLYI4
+   https://www.youtube.com/watch?v=你的视频ID
    ```
 
-2. Run `./run.sh --csv tasks.csv`.
-3. Find the MIDI in `output/`, original audio in `output/audio/`, and raw MIDI
-   and statistics in `output/extras/`. No `input/` folder is needed for this mode.
+2. 在项目目录运行：
 
-Existing installations can update with `uv pip install --python .venv/bin/python -e .`
-(or `.venv/bin/python -m pip install -e .` when pip is installed). The added
-`yt-dlp[default]` dependency includes its normal download and YouTube extraction
-helpers. YouTube extraction may also require a supported JavaScript runtime;
-this runner enables installed Deno or Node.js. If neither is installed, install
-one before downloading from YouTube. No additional ffmpeg installation is needed.
-Audio is kept in its original container and decoded by ffmpeg without an
-intermediate MP3 conversion.
-Some sites may only provide audio in a combined audio/video container.
+   ```bash
+   ./run.sh
+   ```
 
-`status` becomes `processing`, then `done` or `failed`. Run the same command
-again to retry failures and interrupted tasks. Valid completed MIDI is skipped;
-valid cached audio is reused without another download. Missing or corrupt output
-is rebuilt. `--overwrite` forces transcription again while retaining valid audio.
-Duplicate URLs share results, and one failed task does not stop later rows.
+3. 到 `output/` 找 MIDI。文件名自动取视频标题；如需自定义曲名，可添加 `name` 列。
 
-Cache filenames use a URL hash. MIDI filenames use your `name`, or the video
-title when blank; that name and output path are saved before transcription.
-Unsafe filename characters are replaced, and collisions get a stable URL hash
-suffix. Keep the generated `audio_path` and `midi_path` cells when resuming;
-they identify the files belonging to the task. To change a URL, add a new row
-instead of keeping the old row's generated paths. Existing assigned paths are
-retained on retries, including when `-o` changes; new tasks use the new folder.
+程序会补齐处理状态和文件路径。成功项自动跳过，失败或中断后运行同一命令即可继续。
+下载的原格式音频缓存在 `output/audio/`，不经过 MP3 二次压缩；原始 MIDI 和统计在
+`output/extras/`。不要在运行期间编辑 CSV，同一清单一次只运行一个进程。
 
-Paths written into the CSV are relative to the CSV's directory. `-o` retains the
-local CLI's behavior: relative to the working directory (`run.sh` first changes
-to the repository). UTF-8 CSV with or without a BOM is supported, including a
-file with only the `url` header. The runner adds missing standard columns and
-preserves additional columns. Do not edit the CSV while it is running; run only
-one process per CSV. Each update replaces the CSV atomically. Ctrl+C stops the
-batch; run the same command to resume. Exit codes: 0 for success, 1 for task
-failures, 2 for task-list/usage errors, 130 for interruption.
+## 首次安装
 
-Use single video links you are permitted to download. Playlist/channel expansion,
-live streams and bypassing DRM or access restrictions are not supported. Site
-changes or restrictions may cause individual downloads to fail; the error is
-recorded in the CSV. Use `uv pip install --python .venv/bin/python --upgrade 'yt-dlp[default]'`
-to update the downloader when needed.
-
-## What piano2midi changes
-
-The model output is kept as is, apart from three small fixes that are on by default. Onsets, pitches and velocities are never changed.
-
-| Fix | Default | Why |
-|---|---|---|
-| Trim same-pitch overlaps | on | A key can't be pressed again before it is released. |
-| Drop the soft pedal (CC67) | on | Its prediction is unreliable and colors whole passages. Keep it with `--keep-soft-pedal`. |
-| Release the pedal at the end | on | No hanging pedal. |
-| Close short melody gaps | off | `--legato` holds the top voice 20 ms into the next note when the gap is 100 ms or less. Good for cantabile pieces. On Gould's detached Bach it would have changed about 18% of the notes. |
-| Pedal ramps | off | `--pedal-ramps` turns instant 0/127 jumps into about 50 ms of foot travel. |
-
-Not done on purpose: quantization, velocity "humanizing" or rescaling, hand separation, score correction, source separation.
-
-## Options
-
-```text
-piano2midi INPUT... [-o OUTPUT_DIR] [--overwrite] [--legato] [--keep-soft-pedal]
-                    [--pedal-ramps] [--device auto|cpu|cuda|mps] [--threads N]
-piano2midi --csv TASKS.csv [same options]
-```
-
-`--device auto` uses CUDA when available and the CPU otherwise. The CPU is reliable on Apple Silicon; `mps` is opt-in.
-
-## HTTP API
+需要 macOS 或 Linux、Python 3.10+（或 uv）。在项目目录运行：
 
 ```bash
-pip install -e ".[api]"
-uvicorn piano2midi.api:app --port 8000
-curl -F file=@song.mp3 "http://localhost:8000/transcribe" -o song.mid
+./setup.sh
 ```
 
-| Endpoint | Description |
-|---|---|
-| `GET /health` | Status, and whether the model is loaded. |
-| `POST /transcribe` | Multipart field `file`. Optional query flags `legato`, `keep_soft_pedal`, `pedal_ramps` (all false by default). Returns the MIDI file, with a summary in the `X-Piano2MIDI-Info` header. |
+安装完成后会创建空白 `tasks.csv`，已有清单不会被覆盖。ffmpeg 随依赖提供，
+YouTube 下载还需要本机安装 Deno 或 Node.js。`tasks.csv` 和 `output/` 不提交到 Git。
 
-A CPU `Dockerfile` is included. Each process handles one request at a time; on 2 CPU cores a recording takes about half to three quarters of its own length.
-
-## Limits
-
-- Works best on **solo piano**. Songs with vocals or a band produce many wrong notes; there is no source separation yet.
-- The pedal is on/off. Half-pedaling is not recovered.
-- Expect some missed soft inner notes and occasional wrong notes in dense passages. This is a performance transcription, not a score.
-- Local audio and individual video URLs via CSV are supported; website support
-  depends on yt-dlp and the source's availability.
-
-## Development
+## 其他用法
 
 ```bash
-.venv/bin/pip install -e ".[dev,api]"
-.venv/bin/pytest
+# 指定清单、设备和 CPU 线程数
+./run.sh --csv tasks.csv --device cpu --threads 2
+
+# 重新转录，复用已下载的有效音频
+./run.sh --csv tasks.csv --overwrite
+
+# 直接转换本地音频文件或目录，不需要 input 文件夹
+./run.sh /path/to/song.mp3
+./run.sh /path/to/recordings -o output
 ```
 
-## Credits and licenses
+CSV 列为 `url,name,status,audio_path,midi_path,error`，仅 `url` 必填。
+状态为 `pending`、`processing`、`done` 或 `failed`，空白视为待处理。
+保留生成的路径列以便恢复；更换链接时新增一行。路径相对 CSV 所在目录保存，
+已分配的输出路径在重试时保持固定。新任务使用 `-o` 指定的目录。
+单项失败返回 1，清单或用法错误返回 2，中断返回 130。
 
-- piano2midi: MIT (see [`LICENSE`](LICENSE)).
-- [Transkun](https://github.com/Yujia-Yan/Transkun): MIT, by Yujia Yan and Zhiyao Duan. The pretrained weights ship inside the `transkun` pip package and were trained on the MAESTRO dataset (CC BY-NC-SA 4.0); check those terms before any commercial use.
+清理默认修正同音重叠、移除弱音踏板并确保末尾松开延音踏板。
+可用 `--legato`、`--keep-soft-pedal`、`--pedal-ramps` 调整，详见 `./run.sh --help`。
+
+## 限制与维护
+
+适合独奏钢琴，不进行人声／伴奏分离；识别可能有漏音或错音，延音踏板只支持开关。
+仅下载你有权获取的单个视频；不展开播放列表，不支持直播或绕过访问限制。
+网站支持取决于 yt-dlp，下载失败会记录在清单中。更新下载器可运行：
+
+```bash
+uv pip install --python .venv/bin/python --upgrade 'yt-dlp[default]'
+```
+
+`src/` 是核心代码，`tests/` 用于检查功能是否正常。运行测试：
+
+```bash
+uv pip install --python .venv/bin/python pytest
+.venv/bin/python -m pytest
+```
+
+项目采用 MIT 许可证。转录模型来自 [Transkun](https://github.com/Yujia-Yan/Transkun)；
+其预训练权重基于 MAESTRO 数据集（CC BY-NC-SA 4.0），商业使用前请核实相关条款。

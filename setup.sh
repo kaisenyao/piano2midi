@@ -27,6 +27,8 @@ if [ -n "${TORCH_INDEX:-}" ]; then "${PIP[@]}" torch torchaudio --index-url "$TO
 
 echo "Checking that the model loads…"
 .venv/bin/python -W ignore -c "from piano2midi.engine import TranskunEngine; e=TranskunEngine(); print('OK:', e.version, 'on', e.device)"
-chmod +x Convert.command run.sh 2>/dev/null || true
+chmod +x run.sh
+if [ ! -f tasks.csv ]; then printf 'url\n' > tasks.csv; fi
+mkdir -p output
 echo
-echo "Done. Put audio files in ./input and double-click Convert.command (or run ./run.sh input)."
+echo "Done. Add video URLs to tasks.csv, then run ./run.sh. MIDI files go to output/."

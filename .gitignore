@@ -6,9 +6,7 @@ __pycache__/
 tasks.csv
 
 # your music stays on your machine
-input/*
 output/*
-!input/.gitkeep
 !output/.gitkeep
 *.mp3
 *.m4a
@@ -19,7 +17,7 @@ output/*
 *.aiff
 *.mid
 
-# demo media is part of the repo
+# Demo MIDI is part of the repository
 !demo/
 !demo/*.mid
 !demo/*.gif
