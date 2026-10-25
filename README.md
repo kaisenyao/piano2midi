@@ -84,6 +84,60 @@ output/
   extras/song.json       duration, note count, velocity range, pedal count, timing
 ```
 
+## Batch video URLs from a CSV
+
+1. Copy `tasks.example.csv` to `tasks.csv` in the repository root. Replace its
+   example with your video URLs. Only `url` is required; video titles are used
+   automatically. Add an optional `name` column to choose your own filenames.
+
+   ```csv
+   url
+   https://www.youtube.com/watch?v=WqwZC-yLYI4
+   ```
+
+2. Run `./run.sh --csv tasks.csv`.
+3. Find the MIDI in `output/`, original audio in `output/audio/`, and raw MIDI
+   and statistics in `output/extras/`. No `input/` folder is needed for this mode.
+
+Existing installations can update with `uv pip install --python .venv/bin/python -e .`
+(or `.venv/bin/python -m pip install -e .` when pip is installed). The added
+`yt-dlp[default]` dependency includes its normal download and YouTube extraction
+helpers. YouTube extraction may also require a supported JavaScript runtime;
+this runner enables installed Deno or Node.js. If neither is installed, install
+one before downloading from YouTube. No additional ffmpeg installation is needed.
+Audio is kept in its original container and decoded by ffmpeg without an
+intermediate MP3 conversion.
+Some sites may only provide audio in a combined audio/video container.
+
+`status` becomes `processing`, then `done` or `failed`. Run the same command
+again to retry failures and interrupted tasks. Valid completed MIDI is skipped;
+valid cached audio is reused without another download. Missing or corrupt output
+is rebuilt. `--overwrite` forces transcription again while retaining valid audio.
+Duplicate URLs share results, and one failed task does not stop later rows.
+
+Cache filenames use a URL hash. MIDI filenames use your `name`, or the video
+title when blank; that name and output path are saved before transcription.
+Unsafe filename characters are replaced, and collisions get a stable URL hash
+suffix. Keep the generated `audio_path` and `midi_path` cells when resuming;
+they identify the files belonging to the task. To change a URL, add a new row
+instead of keeping the old row's generated paths. Existing assigned paths are
+retained on retries, including when `-o` changes; new tasks use the new folder.
+
+Paths written into the CSV are relative to the CSV's directory. `-o` retains the
+local CLI's behavior: relative to the working directory (`run.sh` first changes
+to the repository). UTF-8 CSV with or without a BOM is supported, including a
+file with only the `url` header. The runner adds missing standard columns and
+preserves additional columns. Do not edit the CSV while it is running; run only
+one process per CSV. Each update replaces the CSV atomically. Ctrl+C stops the
+batch; run the same command to resume. Exit codes: 0 for success, 1 for task
+failures, 2 for task-list/usage errors, 130 for interruption.
+
+Use single video links you are permitted to download. Playlist/channel expansion,
+live streams and bypassing DRM or access restrictions are not supported. Site
+changes or restrictions may cause individual downloads to fail; the error is
+recorded in the CSV. Use `uv pip install --python .venv/bin/python --upgrade 'yt-dlp[default]'`
+to update the downloader when needed.
+
 ## What piano2midi changes
 
 The model output is kept as is, apart from three small fixes that are on by default. Onsets, pitches and velocities are never changed.
@@ -103,6 +157,7 @@ Not done on purpose: quantization, velocity "humanizing" or rescaling, hand sepa
 ```text
 piano2midi INPUT... [-o OUTPUT_DIR] [--overwrite] [--legato] [--keep-soft-pedal]
                     [--pedal-ramps] [--device auto|cpu|cuda|mps] [--threads N]
+piano2midi --csv TASKS.csv [same options]
 ```
 
 `--device auto` uses CUDA when available and the CPU otherwise. The CPU is reliable on Apple Silicon; `mps` is opt-in.
@@ -127,7 +182,8 @@ A CPU `Dockerfile` is included. Each process handles one request at a time; on 2
 - Works best on **solo piano**. Songs with vocals or a band produce many wrong notes; there is no source separation yet.
 - The pedal is on/off. Half-pedaling is not recovered.
 - Expect some missed soft inner notes and occasional wrong notes in dense passages. This is a performance transcription, not a score.
-- Bring your own audio. This project does not download from streaming services.
+- Local audio and individual video URLs via CSV are supported; website support
+  depends on yt-dlp and the source's availability.
 
 ## Development
 

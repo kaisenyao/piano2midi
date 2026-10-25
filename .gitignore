@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .DS_Store
+tasks.csv
 
 # your music stays on your machine
 input/*
