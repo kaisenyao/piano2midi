@@ -6,11 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="demo/pianoteq-playback.gif" alt="A transcribed Glenn Gould recording playing in Pianoteq" width="720">
-</p>
-
-<p align="center">
-  <sub>Glenn Gould's rehearsal of Bach's Partita No. 2, transcribed by piano2midi and played back in Pianoteq 9 (20-second excerpt).</sub>
+  <img src="docs/how-it-works.svg" alt="You ask for a piece; piano2midi on the Mac finds it in the library (or finds a recording and transcribes it) and sends the notes over Wi-Fi to Pianoteq on an iPad, which plays them through a digital piano" width="900">
 </p>
 
 piano2midi turns a piano recording (a YouTube or bilibili video, or an audio file) into a
@@ -19,13 +15,11 @@ a local library. You can then ask for a piece in plain language, typed or spoken
 played by Pianoteq: on the same Mac, or on an iPad that drives a digital piano, so the sound
 comes out of the piano itself.
 
-```
-recording ──► transcription ──► library ──► MIDI over Wi-Fi ──► Pianoteq on iPad ──► digital piano
-                                   ▲
-                    chat or voice: "play Chopin's Nocturne Op. 9 No. 2"
-```
+## Transcription demo
 
-## Demo
+<p align="center">
+  <img src="demo/pianoteq-playback.gif" alt="A transcribed Glenn Gould recording playing in Pianoteq" width="720">
+</p>
 
 **Glenn Gould: J.S. Bach, Partita No. 2 in C minor, BWV 826 (rehearsal recording)**
 
@@ -187,9 +181,14 @@ MIDI input, and add `--port IAC` (or set `PIANO2MIDI_PORT=IAC`).
 ```
 
 Wi-Fi delivers notes unevenly, which breaks the rhythm. So on a Mac each note leaves one second
-early, together with the time it should sound, and the iPad plays it on time. In return,
-playback starts, pauses and stops about one second after you ask. Pausing or stopping lifts all
-keys and the pedal, and continuing puts the pedal back where it was. Set `PIANO2MIDI_LEAD` (or
+early, together with the time it should sound, and the iPad plays it on time:
+
+<p align="center">
+  <img src="docs/timing.svg" alt="Sent when due, notes reach the piano unevenly; sent one second early with their time, the iPad waits and plays them evenly" width="900">
+</p>
+
+In return, playback starts, pauses and stops about one second after you ask. Pausing or stopping
+lifts all keys and the pedal, and continuing puts the pedal back where it was. Set `PIANO2MIDI_LEAD` (or
 `--lead`) in seconds to change the lead: `2` for an unsteady network, `0.5` for a quicker
 response, `0` to send each note when it is due. `--timing` reports how punctually this computer
 sent the notes.
