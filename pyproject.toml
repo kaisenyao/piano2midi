@@ -20,13 +20,9 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["fastapi", "uvicorn", "python-multipart"]
-dev = ["pytest", "httpx", "mir_eval"]
 
 [project.scripts]
 piano2midi = "piano2midi.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

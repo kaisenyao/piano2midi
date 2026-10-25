@@ -117,13 +117,6 @@ To update the downloader:
 uv pip install --python .venv/bin/python --upgrade 'yt-dlp[default]'
 ```
 
-`src/` contains the application code; `tests/` checks its behavior. To run tests:
-
-```bash
-uv pip install --python .venv/bin/python pytest
-.venv/bin/python -m pytest
-```
-
 ## License and credits
 
 piano2midi is MIT licensed. Transcription uses
