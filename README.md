@@ -214,10 +214,14 @@ pauses while you speak and continues afterwards, unless you asked to stop or for
 something else. "Stop", "continue" and "start over" (also in Chinese) act at once;
 everything else goes to the same assistant as the chat.
 
-The wake word runs on the computer (openWakeWord), speech recognition too (Whisper
-large-v3-turbo through MLX, downloaded on first use). Replies are spoken with OpenAI
-text-to-speech, or the macOS voice without `OPENAI_API_KEY`. Change the voice with
-`PIANO2MIDI_TTS_VOICE` (default `coral`). The first run asks for microphone access.
+The wake word runs on the computer (openWakeWord). Speech recognition and the spoken
+replies use OpenAI (`gpt-transcribe`, with your library's titles and names as spelling
+hints, and `gpt-4o-mini-tts`). If you mix languages, list them, for example
+`export PIANO2MIDI_LANGUAGES=zh,en`. Change the voice with `PIANO2MIDI_TTS_VOICE`
+(default `marin`). With `PIANO2MIDI_STT=local`, or without `OPENAI_API_KEY`,
+recognition runs on the computer instead (Whisper large-v3-turbo through MLX,
+downloaded on first use) and replies use the macOS voice. The first run asks for
+microphone access.
 
 ## Limits and maintenance
 
