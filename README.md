@@ -215,9 +215,10 @@ uv pip install --python .venv/bin/python -e ".[voice]"
 ./run.sh voice
 ```
 
-Say "Hey Jasmine" (or its Chinese name, Xiaoming Tongxue), wait for the beep, and
-ask for a piece. Anything that is playing pauses while you speak and continues
-afterwards, unless you asked to stop or for something else. "Stop", "continue"
+Say "Hey Jasmine" (or its Chinese name, Xiaoming Tongxue) and ask for a piece, in
+one breath or after the beep. While music plays, wait for the beep: the piano first
+finishes the notes already on their way. Anything that is playing pauses while you
+speak and continues afterwards, unless you asked to stop or for something else. "Stop", "continue"
 and "start over" (also in Chinese) act at once; everything else goes to the same
 assistant as the chat.
 
@@ -226,7 +227,10 @@ assistant as the chat.
   run. To use other names, list them, separated by commas: Chinese characters or
   English words, for example `export PIANO2MIDI_WAKE_WORDS="Hey Maestro"`. If it
   misses you, lower `PIANO2MIDI_WAKE_THRESHOLD` (default `0.25`); if it wakes by
-  itself, raise it. `./run.sh voice --debug` shows which name it heard.
+  itself, raise it. `./run.sh voice --debug` shows which name it heard and when
+  nothing was heard after it. English names are matched against a pronouncing
+  dictionary, plus a few common non-native ways of saying them (see
+  `EXTRA_PRONUNCIATIONS` in `voice.py`).
 - **Listening:** OpenAI `gpt-transcribe`, with your library's titles and names as
   spelling hints. If you mix languages, list them, for example
   `export PIANO2MIDI_LANGUAGES=zh,en`.

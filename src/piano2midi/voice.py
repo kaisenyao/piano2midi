@@ -46,6 +46,10 @@ WAKE_PARTS = {"encoder": "encoder-epoch-13-avg-2-chunk-16-left-64.onnx",
               "decoder": "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
               "joiner": "joiner-epoch-13-avg-2-chunk-16-left-64.onnx",
               "tokens": "tokens.txt", "lexicon": "en.phone"}
+WAKE_SCORE = 1.5  # how strongly the spotter favors the wake words; 1.5 suited a test with the owner's voice
+# Other ways to say English words in wake words, besides the dictionary's. Chinese speakers often say
+# "jas-MEEN"; with these a test recording of the owner went from 0 to 9 wakes out of 10.
+EXTRA_PRONUNCIATIONS = {"JASMINE": ["JH AE1 Z M IY1 N", "JH AE1 S M IY1 N"]}
 STT_MODEL = os.environ.get("PIANO2MIDI_STT_MODEL", "gpt-transcribe")
 LANGUAGES = [x.strip() for x in os.environ.get("PIANO2MIDI_LANGUAGES", "").split(",") if x.strip()]  # e.g. zh,en
 TTS_MODEL = os.environ.get("PIANO2MIDI_TTS_MODEL", "eleven_v4_turbo")
@@ -200,27 +204,31 @@ def wake_model() -> Path:
     return folder
 
 
-def keyword_line(phrase: str, lexicon: dict[str, list[str]]) -> str:
-    """A wake word in the model's spelling: Chinese as split pinyin, English as phonemes.
+def keyword_lines(phrase: str, lexicon: dict[str, list[str]], limit: int = 8) -> list[str]:
+    """A wake word in the model's spelling, one line per way of saying it: Chinese as split pinyin, English as
+    phonemes from the lexicon (word -> pronunciations).
 
-    "Hey Jasmine" -> "HH EY1 JH AE1 Z M AH0 N @Hey_Jasmine"
+    "Hey Jasmine" -> ["HH EY1 JH AE1 Z M AH0 N @Hey_Jasmine", "HH EY1 JH AE1 Z M IY1 N @Hey_Jasmine", ...]
     """
     from pypinyin import pinyin
     from pypinyin.contrib.tone_convert import to_finals_tone, to_initials
 
-    tokens: list[str] = []
+    spellings = [""]
     for word in re.findall(r"[\u4e00-\u9fff]+|[A-Za-z']+", phrase):
         if word.isascii():
             if word.upper() not in lexicon:
                 raise ValueError(f'the wake word "{phrase}" uses "{word}", which the model does not know')
-            tokens += lexicon[word.upper()]
+            ways = lexicon[word.upper()]
         else:
+            parts = []
             for syllable, *_ in pinyin(word):
-                parts = [p for p in (to_initials(syllable, strict=False), to_finals_tone(syllable, strict=False)) if p]
-                tokens += parts or [syllable]
-    if not tokens:
+                parts += [p for p in (to_initials(syllable, strict=False), to_finals_tone(syllable, strict=False))
+                          if p] or [syllable]
+            ways = [" ".join(parts)]
+        spellings = [f"{s} {w}".strip() for s in spellings for w in ways][:limit]
+    if spellings == [""]:
         raise ValueError(f'the wake word "{phrase}" has no Chinese characters or English words')
-    return " ".join(tokens) + " @" + "_".join(phrase.split())
+    return [f"{s} @" + "_".join(phrase.split()) for s in spellings]
 
 
 class WakeWord:
@@ -230,12 +238,14 @@ class WakeWord:
         import sherpa_onnx
 
         folder = wake_model()
-        lexicon = {}
+        lexicon: dict[str, list[str]] = {}
         for line in (folder / WAKE_PARTS["lexicon"]).read_text(encoding="utf-8").splitlines():
             word, *phones = line.split()
-            lexicon.setdefault(word, phones)
+            lexicon.setdefault(word, []).append(" ".join(phones))
+        for word, ways in EXTRA_PRONUNCIATIONS.items():
+            lexicon.setdefault(word, []).extend(w for w in ways if w not in lexicon[word])
         known = {line.split()[0] for line in (folder / WAKE_PARTS["tokens"]).read_text(encoding="utf-8").splitlines()}
-        lines = [keyword_line(w, lexicon) for w in words]
+        lines = [line for w in words for line in keyword_lines(w, lexicon)]
         for line in lines:
             unknown = [t for t in line.rsplit(" @", 1)[0].split() if t not in known]
             if unknown:
@@ -245,7 +255,8 @@ class WakeWord:
         self.spotter = sherpa_onnx.KeywordSpotter(
             tokens=str(folder / WAKE_PARTS["tokens"]), encoder=str(folder / WAKE_PARTS["encoder"]),
             decoder=str(folder / WAKE_PARTS["decoder"]), joiner=str(folder / WAKE_PARTS["joiner"]),
-            keywords_file=str(keywords), keywords_threshold=threshold, num_threads=1, provider="cpu")
+            keywords_file=str(keywords), keywords_threshold=threshold, keywords_score=WAKE_SCORE, num_threads=1,
+            provider="cpu")
         self.words, self.threshold = words, threshold
         self.reset()
 
@@ -265,21 +276,27 @@ class WakeWord:
 
 
 def record(mic, noise_rms: float) -> np.ndarray | None:
-    """Record one request: wait for speech, stop after a short silence. Float32 at 16 kHz, or None."""
+    """Record one request: wait for speech, stop after a short silence. Float32 at 16 kHz, or None.
+
+    Speech counts as begun after 0.24 s of sound, so the beep or a click does not start the request.
+    """
     threshold = min(max(3 * noise_rms, 300.0), 1500.0)
-    frames, started, silent, elapsed = [], False, 0.0, 0.0
+    frames, loud, started, silent, elapsed = [], 0, False, 0.0, 0.0
     while elapsed < MAX_REQUEST_S:
         frame = mic.read()
         elapsed += FRAME_S
         frames.append(frame)
         if rms(frame) > threshold:
-            started, silent = True, 0.0
-        elif started:
-            silent += FRAME_S
-            if silent >= END_SILENCE_S:
-                break
-        elif elapsed > START_TIMEOUT_S:
-            return None
+            loud, silent = loud + 1, 0.0
+            started = started or loud >= 3
+        else:
+            loud = 0
+            if started:
+                silent += FRAME_S
+                if silent >= END_SILENCE_S:
+                    break
+            elif elapsed > START_TIMEOUT_S:
+                return None
     return np.concatenate(frames).astype(np.float32) / 32768.0 if started else None
 
 
@@ -352,12 +369,12 @@ class Speaker:
 
 
 def beep(freq: float = 880.0, seconds: float = 0.12) -> None:
+    """A short tone; returns at once so listening goes on while it plays."""
     import sounddevice as sd
 
     t = np.arange(int(24000 * seconds)) / 24000
     tone = 0.2 * np.sin(2 * np.pi * freq * t) * np.hanning(t.size)
     sd.play(tone.astype(np.float32), 24000)
-    sd.wait()
 
 
 def handle_command(assistant, action: str) -> bool:
@@ -416,9 +433,10 @@ def main(argv: list[str] | None = None) -> int:
             if was_playing:
                 player.pause()  # so the piano does not drown out the request
                 time.sleep(player.sounding_for + 0.2)  # the notes already sent, and their decay
+                mic.drain()  # piano, not the request: wait for the beep while music plays
+            # Otherwise keep listening straight on, so "<name>, play ..." can be said in one breath.
             assistant.touched_playback = False
             beep()
-            mic.drain()
             audio = record(mic, statistics.median(noise) if noise else 0.0)
             if audio is None and debug:
                 print("  (no speech after the beep)", flush=True)
