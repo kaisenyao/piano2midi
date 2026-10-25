@@ -24,11 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["fastapi", "uvicorn", "python-multipart"]
-voice = [
-    "sounddevice",
-    "openwakeword",
-    "mlx-whisper; sys_platform == 'darwin' and platform_machine == 'arm64'",
-]
+voice = ["sounddevice", "openwakeword"]
 
 [project.scripts]
 piano2midi = "piano2midi.cli:main"

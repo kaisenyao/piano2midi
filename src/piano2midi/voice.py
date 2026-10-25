@@ -2,21 +2,25 @@
 
     ./run.sh voice
 
-The wake word runs on this computer (openWakeWord). Speech recognition and the spoken replies use OpenAI
-(gpt-transcribe, gpt-4o-mini-tts); without OPENAI_API_KEY, or with PIANO2MIDI_STT=local, recognition runs on
-this computer (Whisper large-v3-turbo through MLX, Apple silicon) and replies use the macOS voice.
+The wake word runs on this computer (openWakeWord). Speech recognition uses OpenAI gpt-transcribe
+(OPENAI_API_KEY). Replies are spoken by ElevenLabs (ELEVENLABS_API_KEY and PIANO2MIDI_VOICE_ID), or by the
+macOS voice without them. Add --debug to see how close the wake word came when it did not trigger.
 Install the extras once: uv pip install --python .venv/bin/python -e ".[voice]"
 """
 
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import statistics
 import subprocess
 import sys
+import time
 import unicodedata
+import urllib.error
+import urllib.request
 import warnings
 import wave
 from collections import deque
@@ -29,21 +33,19 @@ SAMPLE_RATE = 16000
 FRAME = 1280  # 80 ms, the frame size openWakeWord works with
 FRAME_S = FRAME / SAMPLE_RATE
 WAKE_WORD = os.environ.get("PIANO2MIDI_WAKE_WORD", "hey_jarvis")
-WAKE_THRESHOLD = float(os.environ.get("PIANO2MIDI_WAKE_THRESHOLD", "0.5"))
-STT = os.environ.get("PIANO2MIDI_STT") or ("openai" if os.environ.get("OPENAI_API_KEY") else "local")
-CLOUD_STT_MODEL = os.environ.get("PIANO2MIDI_STT_CLOUD_MODEL", "gpt-transcribe")
-LOCAL_STT_MODEL = os.environ.get("PIANO2MIDI_STT_MODEL", "mlx-community/whisper-large-v3-turbo")
+WAKE_THRESHOLD = float(os.environ.get("PIANO2MIDI_WAKE_THRESHOLD", "0.3"))
+WAKE_VAD = 0.5  # only score the wake word while someone is speaking, so a low threshold stays safe
+STT_MODEL = os.environ.get("PIANO2MIDI_STT_MODEL", "gpt-transcribe")
 LANGUAGES = [x.strip() for x in os.environ.get("PIANO2MIDI_LANGUAGES", "").split(",") if x.strip()]  # e.g. zh,en
-TTS_MODEL = os.environ.get("PIANO2MIDI_TTS_MODEL", "gpt-4o-mini-tts")
-TTS_VOICE = os.environ.get("PIANO2MIDI_TTS_VOICE", "marin")
-TTS_STYLE = ("Speak like a warm, relaxed friend sitting at the piano, in a natural conversational tone, not too fast. "
-             "When the text is Chinese, speak natural, native Mandarin.")
+TTS_MODEL = os.environ.get("PIANO2MIDI_TTS_MODEL", "eleven_v4_turbo")
+VOICE_ID = os.environ.get("PIANO2MIDI_VOICE_ID", "")
+ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice}/stream?output_format=pcm_24000"
 START_TIMEOUT_S = 6.0  # wait this long for speech to begin after the wake word
 END_SILENCE_S = 0.8  # this much silence ends the request
 MAX_REQUEST_S = 15.0
 
-# A simplified-Chinese example sentence with an English title: Whisper then writes simplified characters and keeps
-# English song names in English. The library titles are added as spelling hints.
+# For Chinese speakers (PIANO2MIDI_LANGUAGES contains zh): a simplified-Chinese example sentence with an English
+# title, so the transcript uses simplified characters and keeps English song names in English.
 STT_PROMPT = "\u4ee5\u4e0b\u662f\u666e\u901a\u8bdd\u548c\u82f1\u8bed\u7684\u53e5\u5b50\u3002\u6211\u60f3\u542c Adele \u7684 Someone Like You\u3002\u6682\u505c\u3002\u7ee7\u7eed\u3002"
 
 PROMPT_ECHOES = {STT_PROMPT, STT_PROMPT.split("\u3002", 1)[-1], "\u6682\u505c\u3002\u7ee7\u7eed\u3002"}
@@ -65,7 +67,9 @@ COMMANDS = {  # simplified and traditional forms
                 "\u4ece\u5934\u5f39", "\u5f9e\u982d\u5f48", "\u4ece\u5934\u5f00\u59cb", "\u5f9e\u982d\u958b\u59cb", "\u4ece\u5934\u64ad\u653e", "\u5f9e\u982d\u64ad\u653e", "\u91cd\u65b0\u5f39", "\u91cd\u65b0\u5f48"},
     # congtou tan, congtou kaishi, congtou bofang, chongxin tan
 }
-FILLERS_START = ("hey jarvis", "jarvis", "please", "\u8bf7")  # qing
+FILLERS_START = ("hey jarvis", "jarvis", "please", "okay", "ok", "uh", "um", "so",
+                 "\u8bf7", "\u5443", "\u55ef", "\u90a3\u4e2a", "\u90a3", "\u597d\u7684", "\u597d", "\u54e6", "\u554a")
+# qing, e, en, nage, na, hao de, hao, o, a
 FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6")  # ba, a, ya, o
 
 
@@ -78,7 +82,8 @@ def match_command(text: str) -> str | None:
     while changed and t:
         changed = False
         for f in FILLERS_START:
-            if t.startswith(f):
+            whole_word = t == f or t.startswith(f + " ") if f.isascii() else t.startswith(f)  # "so" is not "sorry"
+            if whole_word:
                 t, changed = t[len(f):].strip(), True
         for f in FILLERS_END:
             if t.endswith(f) and t != f:
@@ -90,6 +95,7 @@ def match_command(text: str) -> str | None:
 
 
 def speakable(text: str) -> str:
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # [title](link) -> title
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"[`*_#>\[\]]", "", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -150,15 +156,16 @@ class WakeWord:
         from openwakeword.model import Model
         from openwakeword.utils import download_models
 
+        options = dict(wakeword_models=[name], inference_framework="onnx", vad_threshold=WAKE_VAD)
         try:
-            self.model = Model(wakeword_models=[name], inference_framework="onnx")
+            self.model = Model(**options)
         except Exception:  # first run: fetch the model files
             download_models([name])
-            self.model = Model(wakeword_models=[name], inference_framework="onnx")
+            self.model = Model(**options)
         self.threshold = threshold
 
-    def __call__(self, frame: np.ndarray) -> bool:
-        return max(self.model.predict(frame).values()) >= self.threshold
+    def score(self, frame: np.ndarray) -> float:
+        return float(max(self.model.predict(frame).values()))
 
     def reset(self) -> None:
         self.model.reset()
@@ -183,86 +190,66 @@ def record(mic, noise_rms: float) -> np.ndarray | None:
     return np.concatenate(frames).astype(np.float32) / 32768.0 if started else None
 
 
-class CloudTranscriber:
-    """OpenAI speech recognition: the best accuracy for mixed Chinese and English."""
+class Transcriber:
+    """OpenAI speech recognition; the library's titles and names are passed as spelling hints."""
 
-    def __init__(self, model: str = CLOUD_STT_MODEL):
+    def __init__(self, model: str = STT_MODEL):
         from openai import OpenAI
 
         self.client, self.model = OpenAI(), model
+        self.prompt = STT_PROMPT if "zh" in LANGUAGES else None
         self.label = f"OpenAI {model}"
 
     def __call__(self, audio: np.ndarray, lib) -> str:
         extra = {}
         if self.model == "gpt-transcribe":  # spelling hints and expected languages
             extra = {"keywords": hints(lib), **({"languages": LANGUAGES} if LANGUAGES else {})}
-        request = dict(model=self.model, file=("request.wav", to_wav(audio), "audio/wav"), prompt=STT_PROMPT,
-                       response_format="text")
+        request = dict(model=self.model, file=("request.wav", to_wav(audio), "audio/wav"), response_format="text",
+                       **({"prompt": self.prompt} if self.prompt else {}))
         try:
             text = self.client.audio.transcriptions.create(**request, **extra)
         except Exception:
             if not extra:
                 raise
             text = self.client.audio.transcriptions.create(**request)  # without the optional hints
-        return clean_transcript(str(text), STT_PROMPT)
-
-
-class LocalTranscriber:
-    """Whisper on this computer through MLX (Apple silicon); the model is downloaded on first use."""
-
-    def __init__(self, model: str = LOCAL_STT_MODEL):
-        import mlx_whisper
-
-        self.transcribe_fn, self.model = mlx_whisper.transcribe, model
-        self.label = "local Whisper"
-        self.transcribe_fn(np.zeros(SAMPLE_RATE, dtype=np.float32), path_or_hf_repo=model)  # load it now
-
-    def __call__(self, audio: np.ndarray, lib) -> str:
-        prompt = f"{STT_PROMPT} {'; '.join(hints(lib, 8))}".strip()
-        result = self.transcribe_fn(audio, path_or_hf_repo=self.model, temperature=0.0,
-                                    condition_on_previous_text=False, initial_prompt=prompt, verbose=None)
-        segments = result.get("segments") or []
-        if not segments or all(s.get("no_speech_prob", 0) > 0.6 for s in segments):
-            return ""
-        return clean_transcript(result.get("text", ""), prompt)
-
-
-def make_transcriber():
-    return LocalTranscriber() if STT == "local" else CloudTranscriber()
+        return clean_transcript(str(text), self.prompt)
 
 
 class Speaker:
-    """OpenAI text-to-speech, streamed as it arrives; the macOS voice as a fallback."""
+    """ElevenLabs text-to-speech, played while it streams in; the macOS voice as a fallback."""
 
     def __init__(self):
-        self.client = None
-        if os.environ.get("OPENAI_API_KEY"):
-            from openai import OpenAI
-
-            self.client = OpenAI()
+        self.key = os.environ.get("ELEVENLABS_API_KEY", "")
+        self.cloud = bool(self.key and VOICE_ID)
+        self.label = f"ElevenLabs {TTS_MODEL}" if self.cloud else "macOS (no ELEVENLABS_API_KEY / PIANO2MIDI_VOICE_ID)"
 
     def say(self, text: str) -> None:
         text = speakable(text)
         if not text:
             return
-        if self.client is not None:
+        if self.cloud:
             try:
-                return self._cloud(text)
-            except Exception as exc:
-                print(f"  (cloud voice failed: {exc}; using the Mac voice from now on)")
-                self.client = None
+                return self._eleven(text)
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode(errors="replace")[:200]
+                print(f"  (ElevenLabs error {exc.code}: {detail}; using the Mac voice)")
+                if exc.code in (401, 402, 403):  # key, payment or permission: stop trying
+                    self.cloud = False
+            except Exception as exc:  # network trouble: the Mac voice for this sentence only
+                print(f"  (ElevenLabs failed: {exc}; using the Mac voice)")
         voice = ["-v", "Tingting"] if re.search(r"[\u3400-\u9fff]", text) else []
         subprocess.run(["say", *voice, text], check=False)
 
-    def _cloud(self, text: str) -> None:
+    def _eleven(self, text: str) -> None:
         import sounddevice as sd
 
-        extra = {"instructions": TTS_STYLE} if TTS_MODEL.startswith("gpt-") else {}
-        with self.client.audio.speech.with_streaming_response.create(
-                model=TTS_MODEL, voice=TTS_VOICE, input=text, response_format="pcm", **extra) as resp:
+        request = urllib.request.Request(
+            ELEVENLABS_URL.format(voice=VOICE_ID), data=json.dumps({"text": text, "model_id": TTS_MODEL}).encode(),
+            headers={"xi-api-key": self.key, "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as resp:
             with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as out:
                 rest = b""
-                for chunk in resp.iter_bytes(4800):
+                while chunk := resp.read(4800):  # 0.1 s of audio
                     chunk, rest = rest + chunk, b""
                     if len(chunk) % 2:
                         chunk, rest = chunk[:-1], chunk[-1:]
@@ -305,20 +292,25 @@ def main(argv: list[str] | None = None) -> int:
     assistant.speak = speaker.say  # "one moment" before a long search is spoken too
     try:
         print("Loading speech recognition and the wake word…", flush=True)
-        stt, wake, mic = make_transcriber(), WakeWord(), Microphone()
+        stt, wake, mic = Transcriber(), WakeWord(), Microphone()
     except ImportError as exc:
         print(f"Voice needs the extras: uv pip install --python .venv/bin/python -e \".[voice]\" ({exc})",
               file=sys.stderr)
         return 2
-    voice = "OpenAI " + TTS_VOICE if speaker.client else "macOS"
-    print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {voice}")
+    debug = "--debug" in (argv if argv is not None else sys.argv[1:])
+    print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {speaker.label}")
     print('Say "Hey Jarvis", then your request. Control+C quits.\n', flush=True)
     noise: deque[float] = deque(maxlen=25)  # about two seconds of background level
+    last_hint = 0.0
     try:
         while True:
             frame = mic.read()
             noise.append(rms(frame))
-            if not wake(frame):
+            score = wake.score(frame)
+            if score < wake.threshold:
+                if debug and score >= 0.1 and time.time() - last_hint > 1:  # a near miss
+                    print(f"  (wake word {score:.2f}, needs {wake.threshold:.2f})", flush=True)
+                    last_hint = time.time()
                 continue
             player = assistant.player
             was_playing = player is not None and player.state == "playing"

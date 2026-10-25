@@ -201,8 +201,7 @@ pedal back where it was.
 
 ## Voice
 
-Talk to the assistant instead of typing (macOS on Apple silicon). Install the extras
-once, then run:
+Talk to the assistant instead of typing. Install the extras once, then run:
 
 ```bash
 uv pip install --python .venv/bin/python -e ".[voice]"
@@ -214,14 +213,19 @@ pauses while you speak and continues afterwards, unless you asked to stop or for
 something else. "Stop", "continue" and "start over" (also in Chinese) act at once;
 everything else goes to the same assistant as the chat.
 
-The wake word runs on the computer (openWakeWord). Speech recognition and the spoken
-replies use OpenAI (`gpt-transcribe`, with your library's titles and names as spelling
-hints, and `gpt-4o-mini-tts`). If you mix languages, list them, for example
-`export PIANO2MIDI_LANGUAGES=zh,en`. Change the voice with `PIANO2MIDI_TTS_VOICE`
-(default `marin`). With `PIANO2MIDI_STT=local`, or without `OPENAI_API_KEY`,
-recognition runs on the computer instead (Whisper large-v3-turbo through MLX,
-downloaded on first use) and replies use the macOS voice. The first run asks for
-microphone access.
+- **Wake word:** runs on the computer (openWakeWord). If it misses you, run
+  `./run.sh voice --debug` to see how close it came, and lower
+  `PIANO2MIDI_WAKE_THRESHOLD` (default `0.3`) if needed.
+- **Listening:** OpenAI `gpt-transcribe`, with your library's titles and names as
+  spelling hints. If you mix languages, list them, for example
+  `export PIANO2MIDI_LANGUAGES=zh,en`.
+- **Speaking:** ElevenLabs. Set `ELEVENLABS_API_KEY` and the voice to use,
+  `PIANO2MIDI_VOICE_ID` (from My Voices on elevenlabs.io; voices from the shared
+  library need paid credits). The default model is `eleven_v4_turbo`; set
+  `PIANO2MIDI_TTS_MODEL=eleven_v4` for the richer, slower one. Without these
+  settings the macOS voice is used.
+
+The first run asks for microphone access.
 
 ## Limits and maintenance
 
