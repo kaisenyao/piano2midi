@@ -7,7 +7,8 @@ The wake words are heard on this computer by sherpa-onnx keyword spotting, which
 training; set them with PIANO2MIDI_WAKE_WORDS (comma-separated). Speech recognition uses OpenAI gpt-transcribe
 (OPENAI_API_KEY). Replies are spoken by ElevenLabs (ELEVENLABS_API_KEY and PIANO2MIDI_VOICE_ID), or by the
 macOS voice without them. Pause after the name and she says she is listening; or say the name and the request
-in one breath. Add --debug to see which wake word was heard and what she answered.
+in one breath. Add --debug to see which wake word was heard and what she answered, or --greetings to hear
+every greeting once.
 Install the extras once: uv pip install --python .venv/bin/python -e ".[voice]"
 """
 
@@ -62,11 +63,14 @@ VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use
 # What she says when woken and you pause, in the language of the name you used; made once with the ElevenLabs
 # voice and kept in output/.cache/voice. Without ElevenLabs she beeps instead.
 GREETINGS = {
-    "zh": ["\u6211\u5728\uff01", "\u5728\u5462\uff01", "\u6211\u5728\u7684\uff0c\u600e\u4e48\u5566\uff1f", "\u4f60\u8bf4\u5440\uff01", "\u6765\u5566\uff01",
-           "\u5728\u7684\u5728\u7684\uff01"],
-    # wo zai! / zai ne! / wo zai de, zenme la? / ni shuo ya! / lai la! / zai de zai de!
-    "en": ["Yes, I'm here!", "What's up?", "I'm listening!", "Yes?", "Hi there!", "Here!"],
+    "zh": ["\u5728\u5462\u5728\u5462\uff01", "\u563f\uff0c\u6211\u5728\uff01", "\u6765\u5566\u6765\u5566\uff01", "\u6211\u5728\u5462\uff0c\u600e\u4e48\u5566\uff1f",
+           "\u55e8\uff0c\u6211\u5728\uff01", "\u4f60\u8bf4\u4f60\u8bf4\uff01"],
+    # zai ne zai ne! / hei, wo zai! / lai la lai la! / wo zai ne, zenme la? / hai, wo zai! / ni shuo ni shuo!
+    "en": ["Yes! I'm here!", "Hey! What's up?", "I'm all ears!", "Yes? I'm listening!", "Hi there!", "Here I am!"],
 }
+# Greetings are said brightly: an ElevenLabs audio tag, a little less steady than replies, and a touch faster.
+GREETING_TAG = "[excited] "
+GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.35, "speed": 1.1}
 GO_ON_FRAMES = 4  # after the wake word, 0.32 s to tell whether you go straight on with the request
 START_TIMEOUT_S = 6.0  # wait this long for speech to begin after the wake word
 END_SILENCE_S = 0.8  # this much silence ends the request
@@ -370,22 +374,22 @@ class Speaker:
         voice = ["-v", "Tingting"] if re.search(r"[\u3400-\u9fff]", text) else []
         subprocess.run(["say", *voice, text], check=False)
 
-    def _request(self, text: str) -> urllib.request.Request:
-        body = {"text": text, "model_id": TTS_MODEL, "voice_settings": VOICE_SETTINGS}
+    def _request(self, text: str, settings: dict = VOICE_SETTINGS) -> urllib.request.Request:
+        body = {"text": text, "model_id": TTS_MODEL, "voice_settings": settings}
         return urllib.request.Request(ELEVENLABS_URL.format(voice=VOICE_ID), data=json.dumps(body).encode(),
                                       headers={"xi-api-key": self.key, "Content-Type": "application/json"})
 
-    def clip_path(self, text: str) -> Path:
+    def clip_path(self, text: str, settings: dict = VOICE_SETTINGS) -> Path:
         from .library import CACHE_DIR
 
-        key = hashlib.sha1(json.dumps([VOICE_ID, TTS_MODEL, VOICE_SETTINGS, text]).encode()).hexdigest()[:16]
+        key = hashlib.sha1(json.dumps([VOICE_ID, TTS_MODEL, settings, text]).encode()).hexdigest()[:16]
         return CACHE_DIR / "voice" / f"{key}.wav"
 
-    def clip(self, text: str) -> np.ndarray:
+    def clip(self, text: str, settings: dict = VOICE_SETTINGS) -> np.ndarray:
         """The voice saying text as 24 kHz audio, made once and then read from output/.cache/voice."""
-        path = self.clip_path(text)
+        path = self.clip_path(text, settings)
         if not path.is_file():
-            with urllib.request.urlopen(self._request(text), timeout=30) as resp:
+            with urllib.request.urlopen(self._request(text, settings), timeout=30) as resp:
                 pcm = resp.read()
             path.parent.mkdir(parents=True, exist_ok=True)
             part = path.with_suffix(".part")
@@ -429,11 +433,11 @@ class Greeter:
         if not speaker.cloud:
             return
         texts = [(lang, t) for lang, lines in GREETINGS.items() for t in lines]
-        if any(not speaker.clip_path(t).is_file() for _, t in texts):
+        if any(not speaker.clip_path(GREETING_TAG + t, GREETING_SETTINGS).is_file() for _, t in texts):
             print("Preparing her greetings (once)…", flush=True)
         for lang, text in texts:
             try:
-                self.clips[lang].append((text, speaker.clip(text)))
+                self.clips[lang].append((text, speaker.clip(GREETING_TAG + text, GREETING_SETTINGS)))
             except Exception as exc:  # that one is left out; a beep stands in if none are left
                 print(f"  (could not prepare \"{text}\": {exc})")
                 if isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 402, 403):
@@ -454,6 +458,19 @@ class Greeter:
         sd.wait()
         return text
 
+    def preview(self) -> None:
+        """Say every greeting once, to hear how they sound."""
+        import sounddevice as sd
+
+        for lang, clips in self.clips.items():
+            for text, clip in clips:
+                print(f"  {lang}: {text}", flush=True)
+                sd.play(clip, 24000)
+                sd.wait()
+                time.sleep(0.4)
+        if not any(self.clips.values()):
+            print("No greetings: set ELEVENLABS_API_KEY and PIANO2MIDI_VOICE_ID.")
+
 
 def handle_command(assistant, action: str) -> bool:
     """Run a short command; False when it cannot apply (nothing played yet), so the model answers instead."""
@@ -469,6 +486,10 @@ def main(argv: list[str] | None = None) -> int:
     from .llm import make_chat
     from .play import clock
 
+    args = argv if argv is not None else sys.argv[1:]
+    if "--greetings" in args:  # just listen to her greetings
+        Greeter(Speaker()).preview()
+        return 0
     lib = Library()
     index_midi_folder(lib)
     lib.write_playlist()
@@ -492,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError) as exc:  # no network for the first download, or an unusable name
         print(f"Cannot start the wake word: {exc}", file=sys.stderr)
         return 2
-    debug = "--debug" in (argv if argv is not None else sys.argv[1:])
+    debug = "--debug" in args
     print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {speaker.label}")
     said = " or ".join(f'"{w}"' for w in wake.words)
     print(f"Say {said}, then your request. Control+C quits.\n", flush=True)

@@ -240,9 +240,10 @@ assistant as the chat.
   `PIANO2MIDI_VOICE_ID` (from My Voices on elevenlabs.io; voices from the shared
   library need paid credits). The default model is `eleven_v4_turbo`; set
   `PIANO2MIDI_TTS_MODEL=eleven_v4` for the richer, slower one. Without these
-  settings the macOS voice is used. Her greetings are made once with this voice
-  and kept in `output/.cache/voice`; change them in `GREETINGS` in `voice.py`.
-  Without ElevenLabs she beeps instead.
+  settings the macOS voice is used. Her greetings are made once with this voice,
+  a little brighter than her replies, and kept in `output/.cache/voice`; hear them
+  all with `./run.sh voice --greetings` and change them in `GREETINGS` in
+  `voice.py`. Without ElevenLabs she beeps instead.
 
 The first run asks for microphone access.
 
