@@ -17,6 +17,7 @@ import re
 import shutil
 import sys
 import tempfile
+import urllib.parse
 import warnings
 from pathlib import Path
 
@@ -45,10 +46,14 @@ For a request to get or play a piece:
    - if the user named a performer, pick only that performer; if none match, say so and ask before using
      someone else.
    If nothing is suitable, try one refined search; if there is still nothing, explain and stop.
-3. Call transcribe_youtube with the chosen URL and a clean title such as
+3. Call transcribe_url with the chosen URL and a clean title such as
    "Chopin - Nocturne Op.9 No.2 (Rubinstein)", plus composer, performer and a few English tags.
 4. Report the chosen video (title, channel, link) and in one sentence why, one or two candidates you skipped,
    and the MIDI path with its note count and pedal presses.
+
+If the user pastes a video link (YouTube, bilibili or any other site), call transcribe_url with that link
+right away, without searching. Give a clean title only if the user said what the piece is; otherwise leave the
+title empty and the video's own title is used. Then report the MIDI path, note count and pedal presses.
 
 Only ask a question when the request is genuinely ambiguous. If the user is vague (for example "a Chopin
 nocturne"), pick a well-known piece and say which. If the user gives a local audio file path, use
@@ -66,15 +71,16 @@ TOOLS = [
      "parameters": {"type": "object", "properties": {
          "query": {"type": "string"},
          "max_results": {"type": "integer", "description": "1-15, default 8"}}, "required": ["query"]}},
-    {"name": "transcribe_youtube",
-     "description": "Download the audio of one YouTube video through the existing piano2midi CSV flow, "
-                    "transcribe it to MIDI and add it to the library. Takes a few minutes.",
+    {"name": "transcribe_url",
+     "description": "Download the audio of one video (YouTube, bilibili or another site yt-dlp supports) through "
+                    "the piano2midi CSV flow, transcribe it to MIDI and add it to the library. Takes a few minutes.",
      "parameters": {"type": "object", "properties": {
          "url": {"type": "string"},
-         "title": {"type": "string", "description": "clean display title used as the file name"},
+         "title": {"type": "string", "description": "clean display title used as the file name; "
+                                                    "empty to use the video's own title"},
          "composer": {"type": "string"}, "performer": {"type": "string"},
          "tags": {"type": "string", "description": "comma-separated English tags"}},
-         "required": ["url", "title"]}},
+         "required": ["url"]}},
     {"name": "transcribe_local",
      "description": "Transcribe a local audio file (mp3, m4a, wav, flac) to MIDI and add it to the library.",
      "parameters": {"type": "object", "properties": {
@@ -96,6 +102,29 @@ def _brief(rec: dict) -> dict:
     return {k: rec[k] for k in keys if k in rec}
 
 
+TRACKING_PARAMS = {"si", "feature", "pp", "spm_id_from", "vd_source", "share_source", "share_medium",
+                   "share_plat", "share_from", "from_spmid", "unique_k", "bbid"}
+
+
+def clean_url(url: str) -> str:
+    """Canonical form of a pasted link, so the same video is recognized when it comes back."""
+    parts = urllib.parse.urlsplit(url.strip())
+    host = re.sub(r"^(www|m|music)\.", "", parts.netloc.lower())
+    path = parts.path.split("/")
+    query = urllib.parse.parse_qs(parts.query)
+    vid = ""
+    if host == "youtu.be":
+        vid = path[1] if len(path) > 1 else ""
+    elif host == "youtube.com":
+        vid = query.get("v", [""])[0] if parts.path == "/watch" else (
+            path[2] if len(path) > 2 and path[1] in {"shorts", "live", "embed"} else "")
+    if re.fullmatch(r"[\w-]{11}", vid):
+        return f"https://www.youtube.com/watch?v={vid}"
+    kept = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+            if k not in TRACKING_PARAMS and not k.startswith("utm_")]
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, urllib.parse.urlencode(kept), ""))
+
+
 class Assistant:
     def __init__(self, lib: Library):
         self.lib = lib
@@ -115,13 +144,13 @@ class Assistant:
             r["in_library"] = known["id"] if known and known["file_exists"] else None
         return {"results": results}
 
-    def transcribe_youtube(self, url: str, title: str, composer: str = "", performer: str = "",
-                           tags: str = "") -> dict:
+    def transcribe_url(self, url: str, title: str = "", composer: str = "", performer: str = "",
+                       tags: str = "") -> dict:
         from .batch import COLUMNS, read_tasks, run_csv, safe_name, save_tasks
 
-        url = url.strip()
-        if not re.match(r"https?://", url):
+        if not re.match(r"https?://", url.strip()):
             return {"status": "failed", "error": "url must start with http:// or https://"}
+        url, title = clean_url(url), title.strip()
         known = self.lib.by_source(url)
         if known and known["file_exists"]:
             return {"status": "already in library", **_brief(known)}
@@ -132,17 +161,17 @@ class Assistant:
         csv_path = work / "task.csv"
         fields, rows = read_tasks(csv_path) if csv_path.exists() else (list(COLUMNS), [])
         if not rows:
-            rows = [{c: "" for c in fields} | {"url": url, "name": safe_name(title)}]
+            rows = [{c: "" for c in fields} | {"url": url, "name": safe_name(title) if title else ""}]
         save_tasks(csv_path, fields, rows)
-        print(f"  · downloading and transcribing \"{title}\" (usually 1–3 minutes)…", flush=True)
+        print(f"  · downloading and transcribing {title or url} (usually 1–3 minutes)…", flush=True)
         run_csv(csv_path, work, Options())
         _, rows = read_tasks(csv_path)
         row = rows[0]
         if row["status"] != "done":
             return {"status": "failed", "error": row["error"] or "unknown error"}
         produced = (work / row["midi_path"]).resolve()
-        rec = file_result(self.lib, produced, title, composer=composer, performer=performer, tags=tags,
-                          source_type="youtube", source_url=url)
+        rec = file_result(self.lib, produced, title or row["name"] or produced.stem, composer=composer,
+                          performer=performer, tags=tags, source_type="url", source_url=url)
         self.lib.log_request(self.request, rec["id"])
         shutil.rmtree(work, ignore_errors=True)
         for folder in (TASK_DIR, CACHE_DIR):  # remove them only when nothing else is left inside

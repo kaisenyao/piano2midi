@@ -132,6 +132,9 @@ Then run:
 
 Example requests: "Play Chopin's Nocturne Op. 9 No. 2 by Rubinstein",
 "something gentle by Debussy", "transcribe ~/Music/my-recording.m4a".
+You can also paste a video link (YouTube, bilibili or another site yt-dlp supports)
+to transcribe it directly, without a search. For a long list of links, use
+`tasks.csv` instead.
 In the chat, `/library` lists or searches the library, `/import <folder>` adds MIDI
 files, `/enrich` fills in composers and other-language titles, `/new` starts over
 and `/quit` exits.
