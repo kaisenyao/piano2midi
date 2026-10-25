@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["fastapi", "uvicorn", "python-multipart"]
-voice = ["sounddevice", "openwakeword"]
+voice = ["sounddevice", "sherpa-onnx", "pypinyin"]
 
 [project.scripts]
 piano2midi = "piano2midi.cli:main"

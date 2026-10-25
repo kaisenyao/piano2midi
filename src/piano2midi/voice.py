@@ -1,10 +1,12 @@
-"""Voice: say "Hey Jarvis", then ask for a piece. The same assistant as ./run.sh chat, with ears and a voice.
+"""Voice: say "Hey Jasmine" (or the Chinese name), then ask for a piece. The same assistant as ./run.sh chat,
+with ears and a voice.
 
     ./run.sh voice
 
-The wake word runs on this computer (openWakeWord). Speech recognition uses OpenAI gpt-transcribe
+The wake words are heard on this computer by sherpa-onnx keyword spotting, which takes any name without
+training; set them with PIANO2MIDI_WAKE_WORDS (comma-separated). Speech recognition uses OpenAI gpt-transcribe
 (OPENAI_API_KEY). Replies are spoken by ElevenLabs (ELEVENLABS_API_KEY and PIANO2MIDI_VOICE_ID), or by the
-macOS voice without them. Add --debug to see how close the wake word came when it did not trigger.
+macOS voice without them. Add --debug to see which wake word was heard.
 Install the extras once: uv pip install --python .venv/bin/python -e ".[voice]"
 """
 
@@ -17,24 +19,32 @@ import re
 import statistics
 import subprocess
 import sys
-import time
+import tarfile
 import unicodedata
 import urllib.error
 import urllib.request
 import warnings
 import wave
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 
 warnings.filterwarnings("ignore")
 
 SAMPLE_RATE = 16000
-FRAME = 1280  # 80 ms, the frame size openWakeWord works with
+FRAME = 1280  # 80 ms of audio per read
 FRAME_S = FRAME / SAMPLE_RATE
-WAKE_WORD = os.environ.get("PIANO2MIDI_WAKE_WORD", "hey_jarvis")
-WAKE_THRESHOLD = float(os.environ.get("PIANO2MIDI_WAKE_THRESHOLD", "0.3"))
-WAKE_VAD = 0.5  # only score the wake word while someone is speaking, so a low threshold stays safe
+# Chinese characters or English words. The default Chinese name is xiao ming tongxue.
+WAKE_WORDS = [w.strip() for w in os.environ.get("PIANO2MIDI_WAKE_WORDS", "\u5c0f\u8317\u540c\u5b66,Hey Jasmine").split(",")
+              if w.strip()]
+WAKE_THRESHOLD = float(os.environ.get("PIANO2MIDI_WAKE_THRESHOLD", "0.25"))  # lower hears more, wakes more by mistake
+WAKE_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"  # Chinese and English, about 33 MB to download
+WAKE_MODEL_URL = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{WAKE_MODEL}.tar.bz2"
+WAKE_PARTS = {"encoder": "encoder-epoch-13-avg-2-chunk-16-left-64.onnx",
+              "decoder": "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
+              "joiner": "joiner-epoch-13-avg-2-chunk-16-left-64.onnx",
+              "tokens": "tokens.txt", "lexicon": "en.phone"}
 STT_MODEL = os.environ.get("PIANO2MIDI_STT_MODEL", "gpt-transcribe")
 LANGUAGES = [x.strip() for x in os.environ.get("PIANO2MIDI_LANGUAGES", "").split(",") if x.strip()]  # e.g. zh,en
 TTS_MODEL = os.environ.get("PIANO2MIDI_TTS_MODEL", "eleven_v4_turbo")
@@ -51,10 +61,14 @@ MAX_REQUEST_S = 15.0
 STT_PROMPT = "\u4ee5\u4e0b\u662f\u666e\u901a\u8bdd\u548c\u82f1\u8bed\u7684\u53e5\u5b50\u3002\u6211\u60f3\u542c Adele \u7684 Someone Like You\u3002\u6682\u505c\u3002\u7ee7\u7eed\u3002"
 
 PROMPT_ECHOES = {STT_PROMPT, STT_PROMPT.split("\u3002", 1)[-1], "\u6682\u505c\u3002\u7ee7\u7eed\u3002"}
+# Spelling hints for Chinese speakers besides the library's names: the commands that are easiest to mishear.
+STT_COMMAND_HINTS = ["\u6682\u505c", "\u505c\u6b62\u64ad\u653e", "\u7ee7\u7eed\u64ad\u653e", "\u4ece\u5934\u5f39"]
+# zanting, tingzhi bofang, jixu bofang, congtou tan
 
 VOICE_NOTE = """
 
-Your replies are spoken aloud by a young, cheerful voice, so sound natural and a little playful. Use one short
+Your names are {names}; people say one of them to wake you, and you use the one that fits the language of the
+conversation. Your replies are spoken aloud by a young, cheerful voice, so sound natural and a little playful. Use one short
 sentence when you can and no lists. If the user asks for a link or a file path, say it is on the screen and include
 it; it is shown but not read aloud."""
 
@@ -71,7 +85,15 @@ COMMANDS = {  # simplified and traditional forms
                 "\u4ece\u5934\u5f39", "\u5f9e\u982d\u5f48", "\u4ece\u5934\u5f00\u59cb", "\u5f9e\u982d\u958b\u59cb", "\u4ece\u5934\u64ad\u653e", "\u5f9e\u982d\u64ad\u653e", "\u91cd\u65b0\u5f39", "\u91cd\u65b0\u5f48"},
     # congtou tan, congtou kaishi, congtou bofang, chongxin tan
 }
-FILLERS_START = ("hey jarvis", "jarvis", "please", "okay", "ok", "uh", "um", "so",
+
+
+def assistant_names(words: list[str]) -> list[str]:
+    """The names inside the wake words: "Hey Jasmine" -> "Jasmine"."""
+    return list(dict.fromkeys(re.sub(r"(?i)^hey\s+", "", w) for w in words))
+
+
+FILLERS_START = (*dict.fromkeys(w.casefold() for w in WAKE_WORDS + assistant_names(WAKE_WORDS)),
+                 "please", "okay", "ok", "uh", "um", "so",
                  "\u8bf7", "\u5443", "\u55ef", "\u90a3\u4e2a", "\u90a3", "\u597d\u7684", "\u597d", "\u54e6", "\u554a")
 # qing, e, en, nage, na, hao de, hao, o, a
 FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6")  # ba, a, ya, o
@@ -155,24 +177,90 @@ class Microphone:
             self.stream.read(n)
 
 
+def wake_model() -> Path:
+    """The keyword spotting model's folder, downloaded on first use (only the files needed are kept)."""
+    from .library import CACHE_DIR
+
+    folder = CACHE_DIR / "models" / WAKE_MODEL
+    if all((folder / name).is_file() for name in WAKE_PARTS.values()):
+        return folder
+    print("Downloading the wake word model (about 33 MB, once)…", flush=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(WAKE_MODEL_URL, timeout=60) as resp, tarfile.open(fileobj=resp, mode="r|bz2") as tar:
+        for member in tar:
+            name = member.name.rsplit("/", 1)[-1]
+            if member.isfile() and name in WAKE_PARTS.values():
+                part = folder / (name + ".part")
+                part.write_bytes(tar.extractfile(member).read())
+                part.replace(folder / name)
+    missing = [name for name in WAKE_PARTS.values() if not (folder / name).is_file()]
+    if missing:
+        raise RuntimeError(f"the wake word download lacks {', '.join(missing)}")
+    return folder
+
+
+def keyword_line(phrase: str, lexicon: dict[str, list[str]]) -> str:
+    """A wake word in the model's spelling: Chinese as split pinyin, English as phonemes.
+
+    "Hey Jasmine" -> "HH EY1 JH AE1 Z M AH0 N @Hey_Jasmine"
+    """
+    from pypinyin import pinyin
+    from pypinyin.contrib.tone_convert import to_finals_tone, to_initials
+
+    tokens: list[str] = []
+    for word in re.findall(r"[\u4e00-\u9fff]+|[A-Za-z']+", phrase):
+        if word.isascii():
+            if word.upper() not in lexicon:
+                raise ValueError(f'the wake word "{phrase}" uses "{word}", which the model does not know')
+            tokens += lexicon[word.upper()]
+        else:
+            for syllable, *_ in pinyin(word):
+                parts = [p for p in (to_initials(syllable, strict=False), to_finals_tone(syllable, strict=False)) if p]
+                tokens += parts or [syllable]
+    if not tokens:
+        raise ValueError(f'the wake word "{phrase}" has no Chinese characters or English words')
+    return " ".join(tokens) + " @" + "_".join(phrase.split())
+
+
 class WakeWord:
-    def __init__(self, name: str = WAKE_WORD, threshold: float = WAKE_THRESHOLD):
-        from openwakeword.model import Model
-        from openwakeword.utils import download_models
+    """Listens for the wake words on this computer, with sherpa-onnx keyword spotting (no training needed)."""
 
-        options = dict(wakeword_models=[name], inference_framework="onnx", vad_threshold=WAKE_VAD)
-        try:
-            self.model = Model(**options)
-        except Exception:  # first run: fetch the model files
-            download_models([name])
-            self.model = Model(**options)
-        self.threshold = threshold
+    def __init__(self, words: list[str] = WAKE_WORDS, threshold: float = WAKE_THRESHOLD):
+        import sherpa_onnx
 
-    def score(self, frame: np.ndarray) -> float:
-        return float(max(self.model.predict(frame).values()))
+        folder = wake_model()
+        lexicon = {}
+        for line in (folder / WAKE_PARTS["lexicon"]).read_text(encoding="utf-8").splitlines():
+            word, *phones = line.split()
+            lexicon.setdefault(word, phones)
+        known = {line.split()[0] for line in (folder / WAKE_PARTS["tokens"]).read_text(encoding="utf-8").splitlines()}
+        lines = [keyword_line(w, lexicon) for w in words]
+        for line in lines:
+            unknown = [t for t in line.rsplit(" @", 1)[0].split() if t not in known]
+            if unknown:
+                raise ValueError(f"the wake word {line.rsplit('@', 1)[-1]} cannot be spelled for the model: {unknown}")
+        keywords = folder / "keywords.txt"
+        keywords.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.spotter = sherpa_onnx.KeywordSpotter(
+            tokens=str(folder / WAKE_PARTS["tokens"]), encoder=str(folder / WAKE_PARTS["encoder"]),
+            decoder=str(folder / WAKE_PARTS["decoder"]), joiner=str(folder / WAKE_PARTS["joiner"]),
+            keywords_file=str(keywords), keywords_threshold=threshold, num_threads=1, provider="cpu")
+        self.words, self.threshold = words, threshold
+        self.reset()
+
+    def heard(self, frame: np.ndarray) -> str | None:
+        """Feed one frame of 16-bit audio; the wake word if it was just said."""
+        self.stream.accept_waveform(SAMPLE_RATE, frame.astype(np.float32) / 32768.0)
+        while self.spotter.is_ready(self.stream):
+            self.spotter.decode_stream(self.stream)
+            found = self.spotter.get_result(self.stream)
+            if found:
+                self.reset()
+                return found.replace("_", " ")
+        return None
 
     def reset(self) -> None:
-        self.model.reset()
+        self.stream = self.spotter.create_stream()
 
 
 def record(mic, noise_rms: float) -> np.ndarray | None:
@@ -207,7 +295,9 @@ class Transcriber:
     def __call__(self, audio: np.ndarray, lib) -> str:
         extra = {}
         if self.model == "gpt-transcribe":  # spelling hints and expected languages
-            extra = {"keywords": hints(lib), **({"languages": LANGUAGES} if LANGUAGES else {})}
+            fixed = [*WAKE_WORDS, *(STT_COMMAND_HINTS if "zh" in LANGUAGES else [])]
+            extra = {"keywords": fixed + hints(lib, limit=50 - len(fixed)),
+                     **({"languages": LANGUAGES} if LANGUAGES else {})}
         request = dict(model=self.model, file=("request.wav", to_wav(audio), "audio/wav"), response_format="text",
                        **({"prompt": self.prompt} if self.prompt else {}))
         try:
@@ -287,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
     index_midi_folder(lib)
     lib.write_playlist()
     try:
-        chat, label = make_chat(INSTRUCTIONS + VOICE_NOTE, TOOLS)
+        names = " and ".join(assistant_names(WAKE_WORDS))
+        chat, label = make_chat(INSTRUCTIONS + VOICE_NOTE.format(names=names), TOOLS)
     except Exception as exc:
         print(f"Cannot start the chat model: {exc}", file=sys.stderr)
         return 2
@@ -301,21 +392,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Voice needs the extras: uv pip install --python .venv/bin/python -e \".[voice]\" ({exc})",
               file=sys.stderr)
         return 2
+    except (OSError, RuntimeError, ValueError) as exc:  # no network for the first download, or an unusable name
+        print(f"Cannot start the wake word: {exc}", file=sys.stderr)
+        return 2
     debug = "--debug" in (argv if argv is not None else sys.argv[1:])
     print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {speaker.label}")
-    print('Say "Hey Jarvis", then your request. Control+C quits.\n', flush=True)
+    said = " or ".join(f'"{w}"' for w in wake.words)
+    print(f"Say {said}, then your request. Control+C quits.\n", flush=True)
     noise: deque[float] = deque(maxlen=25)  # about two seconds of background level
-    last_hint = 0.0
     try:
         while True:
             frame = mic.read()
             noise.append(rms(frame))
-            score = wake.score(frame)
-            if score < wake.threshold:
-                if debug and score >= 0.1 and time.time() - last_hint > 1:  # a near miss
-                    print(f"  (wake word {score:.2f}, needs {wake.threshold:.2f})", flush=True)
-                    last_hint = time.time()
+            word = wake.heard(frame)
+            if not word:
                 continue
+            if debug:
+                print(f"  (heard {word})", flush=True)
             player = assistant.player
             was_playing = player is not None and player.state == "playing"
             if was_playing:

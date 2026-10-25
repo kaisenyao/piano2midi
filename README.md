@@ -215,14 +215,18 @@ uv pip install --python .venv/bin/python -e ".[voice]"
 ./run.sh voice
 ```
 
-Say "Hey Jarvis", wait for the beep, and ask for a piece. Anything that is playing
-pauses while you speak and continues afterwards, unless you asked to stop or for
-something else. "Stop", "continue" and "start over" (also in Chinese) act at once;
-everything else goes to the same assistant as the chat.
+Say "Hey Jasmine" (or its Chinese name, Xiaoming Tongxue), wait for the beep, and
+ask for a piece. Anything that is playing pauses while you speak and continues
+afterwards, unless you asked to stop or for something else. "Stop", "continue"
+and "start over" (also in Chinese) act at once; everything else goes to the same
+assistant as the chat.
 
-- **Wake word:** runs on the computer (openWakeWord). If it misses you, run
-  `./run.sh voice --debug` to see how close it came, and lower
-  `PIANO2MIDI_WAKE_THRESHOLD` (default `0.3`) if needed.
+- **Wake words:** heard on the computer by sherpa-onnx keyword spotting, which
+  takes any name without training. Its model (about 33 MB) downloads on the first
+  run. To use other names, list them, separated by commas: Chinese characters or
+  English words, for example `export PIANO2MIDI_WAKE_WORDS="Hey Maestro"`. If it
+  misses you, lower `PIANO2MIDI_WAKE_THRESHOLD` (default `0.25`); if it wakes by
+  itself, raise it. `./run.sh voice --debug` shows which name it heard.
 - **Listening:** OpenAI `gpt-transcribe`, with your library's titles and names as
   spelling hints. If you mix languages, list them, for example
   `export PIANO2MIDI_LANGUAGES=zh,en`.
