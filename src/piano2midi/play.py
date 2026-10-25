@@ -181,6 +181,11 @@ class Player:
         return self._offset
 
     @property
+    def sounding_for(self) -> float:
+        """Seconds until the notes already sent have played out, after a pause or stop."""
+        return max(0.0, self._last_when - time.perf_counter())
+
+    @property
     def now_playing(self) -> str | None:
         return self.current[1] if self.current and self.state == "playing" else None
 

@@ -20,6 +20,7 @@ import statistics
 import subprocess
 import sys
 import tarfile
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -96,7 +97,7 @@ FILLERS_START = (*dict.fromkeys(w.casefold() for w in WAKE_WORDS + assistant_nam
                  "please", "okay", "ok", "uh", "um", "so",
                  "\u8bf7", "\u5443", "\u55ef", "\u90a3\u4e2a", "\u90a3", "\u597d\u7684", "\u597d", "\u54e6", "\u554a")
 # qing, e, en, nage, na, hao de, hao, o, a
-FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6")  # ba, a, ya, o
+FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6", "\u5443", "\u55ef")  # ba, a, ya, o, e, en
 
 
 def match_command(text: str) -> str | None:
@@ -399,11 +400,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {speaker.label}")
     said = " or ".join(f'"{w}"' for w in wake.words)
     print(f"Say {said}, then your request. Control+C quits.\n", flush=True)
-    noise: deque[float] = deque(maxlen=25)  # about two seconds of background level
+    noise: deque[float] = deque(maxlen=25)  # about two seconds of background level, measured while not playing
     try:
         while True:
             frame = mic.read()
-            noise.append(rms(frame))
+            if assistant.player is None or assistant.player.state != "playing":
+                noise.append(rms(frame))
             word = wake.heard(frame)
             if not word:
                 continue
@@ -413,15 +415,20 @@ def main(argv: list[str] | None = None) -> int:
             was_playing = player is not None and player.state == "playing"
             if was_playing:
                 player.pause()  # so the piano does not drown out the request
+                time.sleep(player.sounding_for + 0.2)  # the notes already sent, and their decay
             assistant.touched_playback = False
             beep()
             mic.drain()
             audio = record(mic, statistics.median(noise) if noise else 0.0)
+            if audio is None and debug:
+                print("  (no speech after the beep)", flush=True)
             try:
                 text = stt(audio, lib) if audio is not None else ""
             except Exception as exc:
                 print(f"  (speech recognition failed: {exc})")
                 text = ""
+            if audio is not None and not text and debug:
+                print("  (could not make out any words)", flush=True)
             if text:
                 print(f"you> {text}", flush=True)
                 action = match_command(text)
