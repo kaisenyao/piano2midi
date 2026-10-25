@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
+# ./run.sh                    -> tasks.csv -> output/
 # ./run.sh song.mp3            -> output/song.mid
-# ./run.sh input               -> every audio file in ./input
-# ./run.sh a.mp3 b.flac -o ~/MIDI --overwrite
+# ./run.sh --csv other.csv --threads 2
 set -euo pipefail
 cd "$(dirname "$0")"
 if [ ! -x .venv/bin/piano2midi ]; then echo "Run ./setup.sh first."; exit 1; fi
-if [ $# -eq 0 ]; then set -- input; fi
+if [ $# -eq 0 ]; then
+  if [ ! -f tasks.csv ]; then
+    printf 'url\n' > tasks.csv
+    echo "Created tasks.csv. Add one video URL per row, then run ./run.sh again."
+    exit 0
+  fi
+  set -- --csv tasks.csv
+fi
 exec .venv/bin/piano2midi "$@"
