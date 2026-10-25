@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,20 +82,30 @@ def unique_path(path: Path, overwrite: bool) -> Path:
     raise RuntimeError(f"too many existing copies of {path}")
 
 
-def convert_file(engine, audio_path, out_dir, options: Options, overwrite: bool = False) -> dict:
+def convert_file(engine, audio_path, out_dir, options: Options, overwrite: bool = False,
+                 *, output_name: str | None = None) -> dict:
     audio_path, out_dir = Path(audio_path), Path(out_dir)
+    if output_name is not None and (not output_name or output_name in {".", ".."}
+                                   or "/" in output_name or "\\" in output_name):
+        raise ValueError("output_name must be a filename stem")
     raw, cleaned, info = transcribe_audio(engine, audio_path, options)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / EXTRAS_DIR).mkdir(exist_ok=True)
-    midi_path = unique_path(out_dir / f"{audio_path.stem}.mid", overwrite)
+    midi_path = unique_path(out_dir / f"{output_name or audio_path.stem}.mid", overwrite)
     stem = midi_path.stem
     raw_path = out_dir / EXTRAS_DIR / f"{stem}.raw.mid"
     info_path = out_dir / EXTRAS_DIR / f"{stem}.json"
-    cleaned.write(str(midi_path))
-    raw.write(str(raw_path))
-    pretty_midi.PrettyMIDI(str(midi_path))  # re-read: fail loudly if the file is not valid
     info["files"] = {"midi": str(midi_path), "raw_midi": str(raw_path), "info": str(info_path)}
-    info_path.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Publish the final MIDI last: an interrupted write must not look completed.
+    with tempfile.TemporaryDirectory(dir=out_dir, prefix=".transcribe-") as tmp:
+        stage = Path(tmp)
+        cleaned.write(str(stage / "final.mid"))
+        raw.write(str(stage / "raw.mid"))
+        pretty_midi.PrettyMIDI(str(stage / "final.mid"))
+        (stage / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(stage / "raw.mid", raw_path)
+        os.replace(stage / "info.json", info_path)
+        os.replace(stage / "final.mid", midi_path)
     return info
 
 

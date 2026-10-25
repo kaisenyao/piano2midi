@@ -21,7 +21,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="piano2midi",
         description="Transcribe solo piano recordings (mp3/m4a/wav/flac) into performance MIDI with sustain pedal.",
     )
-    p.add_argument("inputs", nargs="+", help="audio files and/or folders of audio files")
+    p.add_argument("inputs", nargs="*", help="audio files and/or folders of audio files")
+    p.add_argument("--csv", metavar="TASKS", help="video URL task CSV (updated in place)")
     p.add_argument("-o", "--output", default="output", help="output folder (default: ./output)")
     p.add_argument("--overwrite", action="store_true",
                    help="convert again and replace MIDI files that already exist (default: skip them)")
@@ -32,6 +33,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--device", default="auto", help="auto (default), cpu, cuda or mps")
     p.add_argument("--threads", type=int, default=None, help="CPU threads for the model")
     args = p.parse_args(argv)
+
+    if args.csv and args.inputs:
+        p.error("use either --csv TASKS or local audio inputs, not both")
+    if not args.csv and not args.inputs:
+        p.error("provide audio inputs or --csv TASKS")
+    if args.csv:
+        from .batch import run_csv
+
+        return run_csv(args.csv, args.output,
+                       Options(args.legato, args.keep_soft_pedal, args.pedal_ramps),
+                       overwrite=args.overwrite, device=args.device, threads=args.threads)
 
     try:
         files = find_audio_files(args.inputs)
