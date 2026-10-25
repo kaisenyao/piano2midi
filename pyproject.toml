@@ -24,12 +24,18 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["fastapi", "uvicorn", "python-multipart"]
+voice = [
+    "sounddevice",
+    "openwakeword",
+    "mlx-whisper; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 
 [project.scripts]
 piano2midi = "piano2midi.cli:main"
 piano2midi-chat = "piano2midi.chat:main"
 piano2midi-library = "piano2midi.library:main"
 piano2midi-play = "piano2midi.play:main"
+piano2midi-voice = "piano2midi.voice:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -157,6 +157,8 @@ class Assistant:
         self.engine = None
         self.player = None
         self.request = ""
+        self.speak = None  # optional callback that also says interim messages aloud (voice mode)
+        self.touched_playback = False  # set whenever play, pause or stop runs
 
     # ---- tools -------------------------------------------------------------------------------
     def search_library(self, query: str) -> dict:
@@ -238,6 +240,7 @@ class Assistant:
         return self.player
 
     def play(self, id: int | None = None, from_start: bool = False) -> dict:
+        self.touched_playback = True
         try:
             player = self._get_player()
         except LookupError as exc:
@@ -257,6 +260,7 @@ class Assistant:
         return {"status": "playing", "title": player.current[1], "from": clock(player.position)}
 
     def pause(self) -> dict:
+        self.touched_playback = True
         player = self.player
         if not player or player.current is None:
             return {"status": "nothing is playing"}
@@ -267,6 +271,7 @@ class Assistant:
         return {"status": "paused", "title": player.current[1], "at": clock(player.position)}
 
     def stop(self) -> dict:
+        self.touched_playback = True
         if self.player and self.player.current is not None:
             self.player.stop()
             print(f"  ⏹ {self.player.current[1]}", flush=True)
@@ -300,6 +305,8 @@ class Assistant:
                 break
             if reply.text.strip():  # say "one moment" before a long step, not after it
                 print(f"\nassistant> {reply.text.strip()}\n", flush=True)
+                if self.speak:
+                    self.speak(reply.text)
             results = [(c, self.run_tool(c.name, c.arguments)) for c in reply.tool_calls]
             reply = chat.send_tool_results(results)
         return reply.text.strip()

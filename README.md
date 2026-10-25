@@ -199,6 +199,26 @@ Only notes and controllers are sent, so the Pianoteq preset does not change.
 Pausing or stopping lifts all keys and the sustain pedal; continuing puts the
 pedal back where it was.
 
+## Voice
+
+Talk to the assistant instead of typing (macOS on Apple silicon). Install the extras
+once, then run:
+
+```bash
+uv pip install --python .venv/bin/python -e ".[voice]"
+./run.sh voice
+```
+
+Say "Hey Jarvis", wait for the beep, and ask for a piece. Anything that is playing
+pauses while you speak and continues afterwards, unless you asked to stop or for
+something else. "Stop", "continue" and "start over" (also in Chinese) act at once;
+everything else goes to the same assistant as the chat.
+
+The wake word runs on the computer (openWakeWord), speech recognition too (Whisper
+large-v3-turbo through MLX, downloaded on first use). Replies are spoken with OpenAI
+text-to-speech, or the macOS voice without `OPENAI_API_KEY`. Change the voice with
+`PIANO2MIDI_TTS_VOICE` (default `coral`). The first run asks for microphone access.
+
 ## Limits and maintenance
 
 Works best on solo piano. There is no vocal or accompaniment separation, and
