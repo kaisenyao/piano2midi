@@ -199,6 +199,13 @@ Only notes and controllers are sent, so the Pianoteq preset does not change.
 Pausing or stopping lifts all keys and the sustain pedal; continuing puts the
 pedal back where it was.
 
+On a Mac, each note leaves one second early, together with the time it should
+sound. The receiver holds it until then, so Wi-Fi hiccups do not disturb the
+rhythm. In return, playback starts, pauses and stops about one second after you
+ask. To change the lead, set `PIANO2MIDI_LEAD` in seconds: for example `2` for an
+unsteady network, `0.5` for a quicker response, or `0` to send each note when it
+is due. Leave Latency in MIDI Network Setup at 0 ms.
+
 ## Voice
 
 Talk to the assistant instead of typing. Install the extras once, then run:

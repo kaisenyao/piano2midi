@@ -282,6 +282,11 @@ class Assistant:
             print(f"  ⏹ {self.player.current[1]}", flush=True)
         return {"status": "stopped"}
 
+    def close(self) -> None:
+        """Stop playback before the program exits, letting the notes already sent finish."""
+        if self.player:
+            self.player.close()
+
     def update_recording(self, id: int, **fields) -> dict:
         rec = self.lib.update(int(id), **fields)
         return _brief(rec) if rec else {"error": f"no recording with id {id}"}
@@ -367,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if text in {"/quit", "/exit"}:
             assistant.stop()
+            assistant.close()
             return 0
         if text in {"/play", "/pause", "/stop"}:
             result = getattr(assistant, text[1:])()

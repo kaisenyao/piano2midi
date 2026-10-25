@@ -352,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         assistant.stop()
         print()
+        assistant.close()
         return 0
 
 
