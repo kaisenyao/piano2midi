@@ -14,6 +14,7 @@ Install the extras once: uv pip install --python .venv/bin/python -e ".[voice]"
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import io
 import json
@@ -42,14 +43,14 @@ FRAME_S = FRAME / SAMPLE_RATE
 # Chinese characters or English words. The default Chinese name is xiao ming tongxue.
 WAKE_WORDS = [w.strip() for w in os.environ.get("PIANO2MIDI_WAKE_WORDS", "\u5c0f\u8317\u540c\u5b66,Hey Jasmine").split(",")
               if w.strip()]
-WAKE_THRESHOLD = float(os.environ.get("PIANO2MIDI_WAKE_THRESHOLD", "0.25"))  # lower hears more, wakes more by mistake
+WAKE_THRESHOLD = float(os.environ.get("PIANO2MIDI_WAKE_THRESHOLD", "0.2"))  # lower hears more, wakes more by mistake
 WAKE_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"  # Chinese and English, about 33 MB to download
 WAKE_MODEL_URL = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{WAKE_MODEL}.tar.bz2"
 WAKE_PARTS = {"encoder": "encoder-epoch-13-avg-2-chunk-16-left-64.onnx",
               "decoder": "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
               "joiner": "joiner-epoch-13-avg-2-chunk-16-left-64.onnx",
               "tokens": "tokens.txt", "lexicon": "en.phone"}
-WAKE_SCORE = 1.5  # how strongly the spotter favors the wake words; 1.5 suited a test with the owner's voice
+WAKE_SCORE = 2.0  # how strongly the spotter favors the wake words; 2.0 did best on the owner's voice with piano
 # Other ways to say English words in wake words, besides the dictionary's. Chinese speakers often say
 # "jas-MEEN"; with these a test recording of the owner went from 0 to 9 wakes out of 10.
 EXTRA_PRONUNCIATIONS = {"JASMINE": ["JH AE1 Z M IY1 N", "JH AE1 S M IY1 N"]}
@@ -63,20 +64,23 @@ VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use
 # What she says when woken and you pause, in the language of the name you used; made once with the ElevenLabs
 # voice and kept in output/.cache/voice. Without ElevenLabs she beeps instead.
 GREETINGS = {
-    "zh": ["\u54c8\u55bd\u54c8\u55bd\uff0c\u6211\u5728\u5462\uff01", "\u8bf6\uff01\u5728\u5462\u5728\u5462\uff01", "\u6765\u5566\u6765\u5566\uff0c\u4f60\u8bf4\uff01",
-           "\u6211\u5728\u6211\u5728\uff01\u8981\u542c\u4ec0\u4e48\u5440\uff1f", "\u55e8\u55e8\uff0c\u6211\u5728\u8fd9\u513f\u5462\uff01", "\u5728\u7684\u5728\u7684\uff0c\u4f60\u8bf4\u5427\uff01"],
-    # hallo hallo, wo zai ne! / ei! zai ne zai ne! / lai la lai la, ni shuo! / wo zai wo zai! yao ting shenme ya? /
-    # hai hai, wo zai zher ne! / zai de zai de, ni shuo ba!
-    "en": ["Yes! I'm right here!", "Hey hey! What's up?", "Hi! I'm all ears!", "Yes yes, I'm listening!",
-           "Hey there! What shall I play?", "Here I am! What's up?"],
+    "zh": ["\u54c8\u55bd\uff0c\u6211\u5728\u5462\uff01", "\u8bf6\uff0c\u6211\u5728\uff01\u60f3\u542c\u4ec0\u4e48\uff1f", "\u6765\u5566\u6765\u5566\uff0c\u4f60\u8bf4\uff01",
+           "\u5728\u5462\uff01\u60f3\u542c\u4ec0\u4e48\u5440\uff1f", "\u55e8\uff0c\u6211\u5728\u8fd9\u513f\u5462\uff01", "\u6211\u6765\u5566\uff0c\u4f60\u8bf4\u5427\uff01"],
+    # hallo, wo zai ne! / ei, wo zai! xiang ting shenme? / lai la lai la, ni shuo! / zai ne! xiang ting shenme ya? /
+    # hai, wo zai zher ne! / wo lai la, ni shuo ba!   (at most one doubled word, so they do not all sound alike)
+    "en": ["Yes! I'm right here!", "Hey! What's up?", "Hi! I'm all ears!", "I'm listening! Go ahead!",
+           "Hey there! What shall I play?", "Here I am! Tell me!"],
 }
 # Short lines hide their mood, so greetings are said with feeling: an ElevenLabs audio tag, less steady than
 # replies, with some style exaggeration, and a touch faster. Replies keep the defaults.
 GREETING_TAG = "[excited] "
 GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.3, "style": 0.4, "speed": 1.1}
-GO_ON_FRAMES = 4  # after the wake word, 0.32 s to tell whether you go straight on with the request
+# Silero voice activity detection tells speech from silence, the piano, and beeps.
+VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+GO_ON_FRAMES = 8  # after the wake word, up to 0.64 s to tell whether you go straight on with the request
+PRE_ROLL_FRAMES = 20  # in that case the request is sent from 1.6 s before the wake word was heard, name included
 START_TIMEOUT_S = 6.0  # wait this long for speech to begin after the wake word
-END_SILENCE_S = 0.8  # this much silence ends the request
+END_SILENCE_S = 0.7  # this much silence (after the detector's own 0.3 s) ends the request
 MAX_REQUEST_S = 15.0
 
 # For Chinese speakers (PIANO2MIDI_LANGUAGES contains zh): a simplified-Chinese example sentence with an English
@@ -116,20 +120,44 @@ def assistant_names(words: list[str]) -> list[str]:
 
 
 FILLERS_START = (*dict.fromkeys(w.casefold() for w in WAKE_WORDS + assistant_names(WAKE_WORDS)),
-                 "please", "okay", "ok", "uh", "um", "so",
+                 "hey", "\u563f", "please", "okay", "ok", "uh", "um", "so",
                  "\u8bf7", "\u5443", "\u55ef", "\u90a3\u4e2a", "\u90a3", "\u597d\u7684", "\u597d", "\u54e6", "\u554a")
 # qing, e, en, nage, na, hao de, hao, o, a
 FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6", "\u5443", "\u55ef")  # ba, a, ya, o, e, en
 
 
-def match_command(text: str) -> str | None:
-    """'pause', 'resume' or 'restart' when the whole request is one of the short commands."""
+def drop_name(t: str) -> str | None:
+    """t without a wake word or name at its start, allowing for homophones and near spellings; None if none.
+
+    Speech recognition may write the Chinese name with other characters of the same sound, or a near spelling of
+    an English one. t is lower-case without punctuation.
+    """
+    from pypinyin import lazy_pinyin
+
+    for name in WAKE_WORDS + assistant_names(WAKE_WORDS):
+        name = name.casefold()
+        if re.fullmatch(r"[\u4e00-\u9fff]+", name):
+            n = len(name)
+            if lazy_pinyin(t[:n]) == lazy_pinyin(name):
+                return t[n:].strip()
+        elif name.isascii():
+            words, k = t.split(" "), len(name.split())
+            if difflib.SequenceMatcher(None, " ".join(words[:k]), name).ratio() >= 0.8:
+                return " ".join(words[k:])
+    return None
+
+
+def strip_fillers(text: str) -> str:
+    """The request without the name, "uh", "please" and the like around it, lower-case, no punctuation."""
     t = unicodedata.normalize("NFKC", text).casefold()
     t = re.sub(r"[^\w\s']", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     changed = True
     while changed and t:
         changed = False
+        rest = drop_name(t)
+        if rest is not None:
+            t, changed = rest, True
         for f in FILLERS_START:
             whole_word = t == f or t.startswith(f + " ") if f.isascii() else t.startswith(f)  # "so" is not "sorry"
             if whole_word:
@@ -137,6 +165,12 @@ def match_command(text: str) -> str | None:
         for f in FILLERS_END:
             if t.endswith(f) and t != f:
                 t, changed = t[: -len(f)].strip(), True
+    return t
+
+
+def match_command(text: str) -> str | None:
+    """'pause', 'resume' or 'restart' when the whole request is one of the short commands."""
+    t = strip_fillers(text)
     for action, phrases in COMMANDS.items():
         if t in phrases:
             return action
@@ -178,10 +212,6 @@ def to_wav(audio: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def rms(frame: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
-
-
 class Microphone:
     def __init__(self):
         import sounddevice as sd
@@ -220,6 +250,42 @@ def wake_model() -> Path:
     if missing:
         raise RuntimeError(f"the wake word download lacks {', '.join(missing)}")
     return folder
+
+
+def download(url: str, path: Path) -> Path:
+    """Fetch url to path once."""
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_suffix(".part")
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            part.write_bytes(resp.read())
+        part.replace(path)
+    return path
+
+
+class Speech:
+    """Tells whether someone is speaking, frame by frame (Silero voice activity detection via sherpa-onnx)."""
+
+    def __init__(self):
+        import sherpa_onnx
+
+        from .library import CACHE_DIR
+
+        model = download(VAD_URL, CACHE_DIR / "models" / "silero_vad.onnx")
+        silero = sherpa_onnx.SileroVadModelConfig(model=str(model), threshold=0.5, min_silence_duration=0.3,
+                                                  min_speech_duration=0.2)
+        self.vad = sherpa_onnx.VoiceActivityDetector(sherpa_onnx.VadModelConfig(silero_vad=silero,
+                                                                                 sample_rate=SAMPLE_RATE), 30)
+
+    def __call__(self, frame: np.ndarray) -> bool:
+        """Feed one frame of 16-bit audio; True while speech is going on."""
+        self.vad.accept_waveform(frame.astype(np.float32) / 32768.0)
+        while not self.vad.empty():  # finished stretches of speech are not needed
+            self.vad.pop()
+        return self.vad.is_speech_detected()
+
+    def reset(self) -> None:
+        self.vad.reset()
 
 
 def keyword_lines(phrase: str, lexicon: dict[str, list[str]], limit: int = 8) -> list[str]:
@@ -293,35 +359,24 @@ class WakeWord:
         self.stream = self.spotter.create_stream()
 
 
-def speech_level(noise_rms: float) -> float:
-    """Loudness above which a frame counts as speech."""
-    return min(max(3 * noise_rms, 300.0), 1500.0)
+def record(mic, speech: Speech, head: list[np.ndarray] | None = None) -> np.ndarray | None:
+    """Record one request until it is followed by a short silence. Float32 at 16 kHz, or None if nobody spoke.
 
-
-def record(mic, noise_rms: float, first: list[np.ndarray] | None = None) -> np.ndarray | None:
-    """Record one request, starting with the frames in first: wait for speech, stop after a short silence.
-    Float32 at 16 kHz, or None.
-
-    Speech counts as begun after 0.24 s of sound, so the beep or a click does not start the request.
+    With head (audio already heard, speech under way) it goes on from there; otherwise it first waits for speech.
     """
-    threshold = speech_level(noise_rms)
-    pending = list(first or [])
-    frames, loud, started, silent, elapsed = [], 0, False, 0.0, 0.0
+    frames, started, silent, elapsed = list(head or []), bool(head), 0.0, 0.0
     while elapsed < MAX_REQUEST_S:
-        frame = pending.pop(0) if pending else mic.read()
+        frame = mic.read()
         elapsed += FRAME_S
         frames.append(frame)
-        if rms(frame) > threshold:
-            loud, silent = loud + 1, 0.0
-            started = started or loud >= 3
-        else:
-            loud = 0
-            if started:
-                silent += FRAME_S
-                if silent >= END_SILENCE_S:
-                    break
-            elif elapsed > START_TIMEOUT_S:
-                return None
+        if speech(frame):
+            started, silent = True, 0.0
+        elif started:
+            silent += FRAME_S
+            if silent >= END_SILENCE_S:
+                break
+        elif elapsed > START_TIMEOUT_S:
+            return None
     return np.concatenate(frames).astype(np.float32) / 32768.0 if started else None
 
 
@@ -507,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
     assistant.speak = speaker.say  # "one moment" before a long search is spoken too
     try:
         print("Loading speech recognition and the wake word…", flush=True)
-        stt, wake, mic = Transcriber(), WakeWord(), Microphone()
+        stt, wake, speech, mic = Transcriber(), WakeWord(), Speech(), Microphone()
         greet = Greeter(speaker)
     except ImportError as exc:
         print(f"Voice needs the extras: uv pip install --python .venv/bin/python -e \".[voice]\" ({exc})",
@@ -520,12 +575,29 @@ def main(argv: list[str] | None = None) -> int:
     print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {speaker.label}")
     said = " or ".join(f'"{w}"' for w in wake.words)
     print(f"Say {said}, then your request. Control+C quits.\n", flush=True)
-    noise: deque[float] = deque(maxlen=50)  # four seconds of loudness, measured while not playing
+    recent: deque[np.ndarray] = deque(maxlen=PRE_ROLL_FRAMES)  # the last moments, for one-breath requests
+
+    def hear(head: list[np.ndarray] | None = None) -> str:
+        """Record a request (see record) and turn it into text; "" if nothing was made out."""
+        audio = record(mic, speech, head)
+        if audio is None:
+            if debug:
+                print("  (no speech after the name)", flush=True)
+            return ""
+        try:
+            text = stt(audio, lib)
+        except Exception as exc:
+            print(f"  (speech recognition failed: {exc})")
+            return ""
+        if not text and debug:
+            print("  (could not make out any words)", flush=True)
+        return text
+
     try:
         while True:
             frame = mic.read()
-            if assistant.player is None or assistant.player.state != "playing":
-                noise.append(rms(frame))
+            recent.append(frame)
+            speaking = speech(frame)
             word = wake.heard(frame)
             if not word:
                 continue
@@ -534,30 +606,23 @@ def main(argv: list[str] | None = None) -> int:
             if was_playing:
                 player.pause()  # so the piano does not drown out the request
             assistant.touched_playback = False
-            background = float(np.percentile(noise, 20)) if noise else 0.0  # the quiet between words
-            first: list[np.ndarray] = []
-            if player is None or player.sounding_for == 0:  # quiet: did you go straight on with the request?
-                first = [mic.read() for _ in range(GO_ON_FRAMES)]
-            if sum(rms(f) > speech_level(background) for f in first) >= 2:
-                said = "nothing, you went on"  # "<name>, play ..." in one breath: keep listening
-            else:
+            more: list[np.ndarray] = []
+            while speaking and len(more) < GO_ON_FRAMES:  # does the speech go on after the name?
+                more.append(mic.read())
+                speaking = speech(more[-1])
+            text = ""
+            if speaking:  # "<name>, play ..." in one breath: send it all, name included, and keep listening
+                if debug:
+                    print(f"  (heard {word}; you went on)", flush=True)
+                text = hear(list(recent) + more)
+                speaking = bool(strip_fillers(text))  # nothing but the name after all: answer and listen
+            if not speaking:  # a pause after the name: answer, then listen
                 said = greet(word)
-                if player is not None and player.sounding_for:
-                    time.sleep(player.sounding_for + 0.2)  # the notes already sent, and their decay
-                mic.drain()  # her greeting or the piano, not the request
-                first = []
-            if debug:
-                print(f"  (heard {word}; said {said})", flush=True)
-            audio = record(mic, background, first)
-            if audio is None and debug:
-                print("  (no speech after the beep)", flush=True)
-            try:
-                text = stt(audio, lib) if audio is not None else ""
-            except Exception as exc:
-                print(f"  (speech recognition failed: {exc})")
-                text = ""
-            if audio is not None and not text and debug:
-                print("  (could not make out any words)", flush=True)
+                if debug:
+                    print(f"  (heard {word}; said {said})", flush=True)
+                mic.drain()  # her greeting, not the request
+                speech.reset()
+                text = hear()
             if text:
                 print(f"you> {text}", flush=True)
                 action = match_command(text)
@@ -578,6 +643,8 @@ def main(argv: list[str] | None = None) -> int:
                     assistant.player.resume()
             mic.drain()
             wake.reset()
+            speech.reset()
+            recent.clear()
     except KeyboardInterrupt:
         assistant.stop()
         print()
