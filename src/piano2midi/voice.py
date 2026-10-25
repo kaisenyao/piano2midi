@@ -40,6 +40,8 @@ LANGUAGES = [x.strip() for x in os.environ.get("PIANO2MIDI_LANGUAGES", "").split
 TTS_MODEL = os.environ.get("PIANO2MIDI_TTS_MODEL", "eleven_v4_turbo")
 VOICE_ID = os.environ.get("PIANO2MIDI_VOICE_ID", "")
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice}/stream?output_format=pcm_24000"
+# The ElevenLabs defaults, as on its text-to-speech page: stability 0.5, similarity 0.75, no style exaggeration.
+VOICE_SETTINGS = {"stability": 0.5, "similarity_boost": 0.75, "style": 0.0, "use_speaker_boost": True, "speed": 1.0}
 START_TIMEOUT_S = 6.0  # wait this long for speech to begin after the wake word
 END_SILENCE_S = 0.8  # this much silence ends the request
 MAX_REQUEST_S = 15.0
@@ -244,7 +246,7 @@ class Speaker:
         import sounddevice as sd
 
         request = urllib.request.Request(
-            ELEVENLABS_URL.format(voice=VOICE_ID), data=json.dumps({"text": text, "model_id": TTS_MODEL}).encode(),
+            ELEVENLABS_URL.format(voice=VOICE_ID), data=json.dumps({"text": text, "model_id": TTS_MODEL, "voice_settings": VOICE_SETTINGS}).encode(),
             headers={"xi-api-key": self.key, "Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=30) as resp:
             with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as out:
