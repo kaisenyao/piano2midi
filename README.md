@@ -42,77 +42,91 @@
 
 Gould plays this music almost without pedal, and the transcription reflects that. Download the MIDI: [`demo/gould-partita-2-rehearsal.mid`](demo/gould-partita-2-rehearsal.mid)
 
-## 日常使用
+## Quick start
 
-1. 在 `tasks.csv` 填写视频链接，每行一个，只保留 `url` 表头也可以：
+1. Add video URLs to `tasks.csv`, one per row. Only the `url` column is required:
 
    ```csv
    url
-   https://www.youtube.com/watch?v=你的视频ID
+   https://www.youtube.com/watch?v=VIDEO_ID
    ```
 
-2. 在项目目录运行：
+2. Run from the project directory:
 
    ```bash
    ./run.sh
    ```
 
-3. 到 `output/` 找 MIDI。文件名自动取视频标题；如需自定义曲名，可添加 `name` 列。
+3. Find your MIDI files in `output/`. Filenames use video titles automatically;
+   add an optional `name` column to choose your own titles.
 
-程序会补齐处理状态和文件路径。成功项自动跳过，失败或中断后运行同一命令即可继续。
-下载的原格式音频缓存在 `output/audio/`，不经过 MP3 二次压缩；原始 MIDI 和统计在
-`output/extras/`。不要在运行期间编辑 CSV，同一清单一次只运行一个进程。
+The runner fills in task status and file paths. Completed tasks are skipped.
+Run the same command again to retry failures or resume after an interruption.
+Original audio is cached in `output/audio/` without an intermediate MP3 conversion.
+Raw MIDI and statistics are saved in `output/extras/`. Do not edit the CSV while
+it is running, and run only one process per task list.
 
-## 首次安装
+## Installation
 
-需要 macOS 或 Linux、Python 3.10+（或 uv）。在项目目录运行：
+Requires macOS or Linux and Python 3.10+ (or uv). Run from the project directory:
 
 ```bash
 ./setup.sh
 ```
 
-安装完成后会创建空白 `tasks.csv`，已有清单不会被覆盖。ffmpeg 随依赖提供，
-YouTube 下载还需要本机安装 Deno 或 Node.js。`tasks.csv` 和 `output/` 不提交到 Git。
+Setup creates an empty `tasks.csv` without overwriting an existing list. ffmpeg
+is provided by a dependency. YouTube downloads also require an installed Deno
+or Node.js runtime. Your `tasks.csv` and generated files in `output/` are excluded
+from Git.
 
-## 其他用法
+## Other options
 
 ```bash
-# 指定清单、设备和 CPU 线程数
+# Choose a task list, device and CPU thread count
 ./run.sh --csv tasks.csv --device cpu --threads 2
 
-# 重新转录，复用已下载的有效音频
+# Transcribe again while reusing valid cached audio
 ./run.sh --csv tasks.csv --overwrite
 
-# 直接转换本地音频文件或目录，不需要 input 文件夹
+# Convert local audio files or folders; no input directory is required
 ./run.sh /path/to/song.mp3
 ./run.sh /path/to/recordings -o output
 ```
 
-CSV 列为 `url,name,status,audio_path,midi_path,error`，仅 `url` 必填。
-状态为 `pending`、`processing`、`done` 或 `failed`，空白视为待处理。
-保留生成的路径列以便恢复；更换链接时新增一行。路径相对 CSV 所在目录保存，
-已分配的输出路径在重试时保持固定。新任务使用 `-o` 指定的目录。
-单项失败返回 1，清单或用法错误返回 2，中断返回 130。
+CSV columns are `url,name,status,audio_path,midi_path,error`; only `url` is required.
+Status is `pending`, `processing`, `done` or `failed`; a blank status means pending.
+Keep generated path columns to resume tasks. Add a new row when changing a URL.
+Paths are stored relative to the CSV's directory. Assigned output paths stay fixed
+on retries; new tasks use the directory selected with `-o`. Exit codes are 0 for
+success, 1 for task failures, 2 for task-list or usage errors, and 130 for interruption.
 
-清理默认修正同音重叠、移除弱音踏板并确保末尾松开延音踏板。
-可用 `--legato`、`--keep-soft-pedal`、`--pedal-ramps` 调整，详见 `./run.sh --help`。
+By default, cleanup trims same-pitch overlaps, removes soft-pedal events and
+ensures the sustain pedal is released at the end. Use `--legato`,
+`--keep-soft-pedal` and `--pedal-ramps` to adjust the behavior. See `./run.sh --help`.
 
-## 限制与维护
+## Limits and maintenance
 
-适合独奏钢琴，不进行人声／伴奏分离；识别可能有漏音或错音，延音踏板只支持开关。
-仅下载你有权获取的单个视频；不展开播放列表，不支持直播或绕过访问限制。
-网站支持取决于 yt-dlp，下载失败会记录在清单中。更新下载器可运行：
+Works best on solo piano. There is no vocal or accompaniment separation, and
+transcription may miss notes or predict incorrect ones. Sustain pedal is on/off.
+Download only individual videos you are permitted to access and download. Playlist
+expansion, live streams and bypassing access restrictions are not supported.
+Website support depends on yt-dlp; download failures are recorded in the CSV.
+To update the downloader:
 
 ```bash
 uv pip install --python .venv/bin/python --upgrade 'yt-dlp[default]'
 ```
 
-`src/` 是核心代码，`tests/` 用于检查功能是否正常。运行测试：
+`src/` contains the application code; `tests/` checks its behavior. To run tests:
 
 ```bash
 uv pip install --python .venv/bin/python pytest
 .venv/bin/python -m pytest
 ```
 
-项目采用 MIT 许可证。转录模型来自 [Transkun](https://github.com/Yujia-Yan/Transkun)；
-其预训练权重基于 MAESTRO 数据集（CC BY-NC-SA 4.0），商业使用前请核实相关条款。
+## License and credits
+
+piano2midi is MIT licensed. Transcription uses
+[Transkun](https://github.com/Yujia-Yan/Transkun). Its pretrained weights were
+trained on the MAESTRO dataset (CC BY-NC-SA 4.0); check the applicable terms before
+commercial use.
