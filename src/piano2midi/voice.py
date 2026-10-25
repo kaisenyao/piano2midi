@@ -54,7 +54,9 @@ PROMPT_ECHOES = {STT_PROMPT, STT_PROMPT.split("\u3002", 1)[-1], "\u6682\u505c\u3
 
 VOICE_NOTE = """
 
-Your replies are spoken aloud. Use one short sentence when you can, never lists, links or file paths."""
+Your replies are spoken aloud by a young, cheerful voice, so sound natural and a little playful. Use one short
+sentence when you can and no lists. If the user asks for a link or a file path, say it is on the screen and include
+it; it is shown but not read aloud."""
 
 # Short commands handled without the model. Chinese phrases are written as escapes because the repository is
 # English-only; the pinyin is in the comments.
