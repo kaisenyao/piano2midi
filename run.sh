@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ./run.sh                    -> tasks.csv -> output/
-# ./run.sh song.mp3            -> output/song.mid
+# ./run.sh                    -> tasks.csv -> output/MIDI Files/
+# ./run.sh song.mp3            -> output/MIDI Files/song.mid
 # ./run.sh --csv other.csv --threads 2
 # ./run.sh chat                -> ask for a piece in plain language
 # ./run.sh library list        -> show the local MIDI library

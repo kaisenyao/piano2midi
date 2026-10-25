@@ -57,13 +57,14 @@ Gould plays this music almost without pedal, and the transcription reflects that
    ./run.sh
    ```
 
-3. Find your MIDI files in `output/`. Filenames use video titles automatically;
-   add an optional `name` column to choose your own titles.
+3. Find your MIDI files in `output/MIDI Files/`. Filenames use video titles
+   automatically; add an optional `name` column to choose your own titles.
 
 The runner fills in task status and file paths. Completed tasks are skipped.
 Run the same command again to retry failures or resume after an interruption.
-Original audio is cached in `output/audio/` without an intermediate MP3 conversion.
-Raw MIDI and statistics are saved in `output/extras/`. Do not edit the CSV while
+Each finished MIDI is also added to the local library and its playlist (see
+[Chat](#chat)). Work files stay in the hidden `output/.cache/` folder: the original
+audio (no intermediate MP3), raw MIDI and statistics. Do not edit the CSV while
 it is running, and run only one process per task list.
 
 ## Installation
@@ -90,15 +91,18 @@ from Git.
 
 # Convert local audio files or folders; no input directory is required
 ./run.sh /path/to/song.mp3
-./run.sh /path/to/recordings -o output
+
+# Write MIDI and work files to another folder, outside the library
+./run.sh /path/to/recordings -o ~/Desktop/transcriptions
 ```
 
 CSV columns are `url,name,status,audio_path,midi_path,error`; only `url` is required.
 Status is `pending`, `processing`, `done` or `failed`; a blank status means pending.
 Keep generated path columns to resume tasks. Add a new row when changing a URL.
 Paths are stored relative to the CSV's directory. Assigned output paths stay fixed
-on retries; new tasks use the directory selected with `-o`. Exit codes are 0 for
-success, 1 for task failures, 2 for task-list or usage errors, and 130 for interruption.
+on retries; new tasks use the directory selected with `-o` (default `output/.cache`).
+Exit codes are 0 for success, 1 for task failures, 2 for task-list or usage errors,
+and 130 for interruption.
 
 By default, cleanup trims same-pitch overlaps, removes soft-pedal events and
 ensures the sustain pedal is released at the end. Use `--legato`,
@@ -146,8 +150,8 @@ The library is a single file, `output/library.db`. Manage it from the terminal:
 
 MIDI files you place in `output/MIDI Files/` yourself are added when the chat starts.
 `output/MIDI Files/playlist.m3u` lists the whole library in the order it was added and
-is kept up to date. Downloads and other intermediate files are deleted once a MIDI is
-saved. Everything under `output/` stays out of Git.
+is kept up to date. The chat deletes its own downloads once a MIDI is saved.
+Everything under `output/` stays out of Git.
 
 ## Limits and maintenance
 

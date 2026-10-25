@@ -24,11 +24,11 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 from . import youtube
-from .library import DB_PATH, MIDI_DIR, OUTPUT_DIR, Library, enrich, format_row, place_midi
+from .library import CACHE_DIR, DB_PATH, MIDI_DIR, Library, enrich, file_result, format_row
 from .pipeline import Options
 
 MAX_TOOL_ROUNDS = 8
-TASK_DIR = OUTPUT_DIR / "chat_tasks"
+TASK_DIR = CACHE_DIR / "chat"
 
 INSTRUCTIONS = f"""You are the piano2midi assistant. You help the user get performance MIDI files of piano music.
 Reply in the language the user writes in. Keep replies short.
@@ -141,12 +141,13 @@ class Assistant:
         if row["status"] != "done":
             return {"status": "failed", "error": row["error"] or "unknown error"}
         produced = (work / row["midi_path"]).resolve()
-        rec = self.lib.add(place_midi(produced, title), title, composer=composer, performer=performer,
-                           tags=tags, source_type="youtube", source_url=url)
+        rec = file_result(self.lib, produced, title, composer=composer, performer=performer, tags=tags,
+                          source_type="youtube", source_url=url)
         self.lib.log_request(self.request, rec["id"])
         shutil.rmtree(work, ignore_errors=True)
-        with contextlib.suppress(OSError):
-            TASK_DIR.rmdir()  # only succeeds when no other task folder is left
+        for folder in (TASK_DIR, CACHE_DIR):  # remove them only when nothing else is left inside
+            with contextlib.suppress(OSError):
+                folder.rmdir()
         return {"status": "done", **_brief(rec)}
 
     def transcribe_local(self, path: str, title: str, composer: str = "", performer: str = "",
@@ -167,9 +168,8 @@ class Assistant:
             self.engine = TranskunEngine()
         with tempfile.TemporaryDirectory() as tmp:  # only the final MIDI is kept
             info = convert_file(self.engine, src, Path(tmp), Options(), output_name=safe_name(title))
-            placed = place_midi(Path(info["files"]["midi"]), title)
-        rec = self.lib.add(placed, title, composer=composer, performer=performer, tags=tags,
-                           source_type="local", source_url=str(src.resolve()))
+            rec = file_result(self.lib, Path(info["files"]["midi"]), title, composer=composer,
+                              performer=performer, tags=tags, source_type="local", source_url=str(src.resolve()))
         self.lib.log_request(self.request, rec["id"])
         return {"status": "done", **_brief(rec)}
 

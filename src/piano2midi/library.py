@@ -20,9 +20,10 @@ from pathlib import Path
 import pretty_midi
 
 OUTPUT_DIR = Path("output")
-MIDI_DIR = OUTPUT_DIR / "MIDI Files"
+MIDI_DIR = OUTPUT_DIR / "MIDI Files"          # the MIDI files you play
 PLAYLIST = MIDI_DIR / "playlist.m3u"
 DB_PATH = OUTPUT_DIR / "library.db"
+CACHE_DIR = OUTPUT_DIR / ".cache"              # downloads, raw MIDI, statistics, task state
 
 FIELDS = ("title", "composer", "performer", "aliases", "tags")
 SCHEMA = """
@@ -104,6 +105,22 @@ def place_midi(src: Path, title: str, midi_dir: Path = MIDI_DIR) -> Path:
     if not dest.exists():
         shutil.copy2(src, dest)
     return dest
+
+
+def file_result(lib: "Library", produced: Path, title: str, *, source_type: str, source_url: str,
+                composer: str = "", performer: str = "", tags: str = "") -> dict:
+    """Put a freshly transcribed MIDI into the MIDI folder and the library.
+
+    A new transcription of a source that is already in the library replaces that file in place.
+    """
+    known = lib.by_source(source_url)
+    if known and known["file_exists"]:
+        if Path(produced).resolve() != Path(known["midi_path"]):
+            shutil.copy2(produced, known["midi_path"])
+        return lib.add(Path(known["midi_path"]), known["title"], composer=composer, performer=performer,
+                       tags=tags, source_type=source_type, source_url=source_url)
+    return lib.add(place_midi(Path(produced), title), title, composer=composer, performer=performer,
+                   tags=tags, source_type=source_type, source_url=source_url)
 
 
 class Library:

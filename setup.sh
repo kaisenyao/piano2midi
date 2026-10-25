@@ -31,4 +31,4 @@ chmod +x run.sh
 if [ ! -f tasks.csv ]; then printf 'url\n' > tasks.csv; fi
 mkdir -p output
 echo
-echo "Done. Add video URLs to tasks.csv, then run ./run.sh. MIDI files go to output/."
+echo "Done. Add video URLs to tasks.csv, then run ./run.sh. MIDI files go to output/MIDI Files/."

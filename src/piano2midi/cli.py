@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 from .audio import find_audio_files
+from .library import CACHE_DIR, MIDI_DIR, Library, file_result
 from .pipeline import Options, convert_file
 
 
@@ -23,7 +24,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("inputs", nargs="*", help="audio files and/or folders of audio files")
     p.add_argument("--csv", metavar="TASKS", help="video URL task CSV (updated in place)")
-    p.add_argument("-o", "--output", default="output", help="output folder (default: ./output)")
+    p.add_argument("-o", "--output", default=None,
+                   help="write MIDI and work files to this folder instead of the library "
+                        "(default: output/MIDI Files, work files in output/.cache)")
     p.add_argument("--overwrite", action="store_true",
                    help="convert again and replace MIDI files that already exist (default: skip them)")
     p.add_argument("--legato", action="store_true",
@@ -38,12 +41,33 @@ def main(argv: list[str] | None = None) -> int:
         p.error("use either --csv TASKS or local audio inputs, not both")
     if not args.csv and not args.inputs:
         p.error("provide audio inputs or --csv TASKS")
+    use_library = args.output is None
+    if use_library:
+        args.output = str(CACHE_DIR)
     if args.csv:
-        from .batch import run_csv
+        from .batch import read_tasks, run_csv
 
-        return run_csv(args.csv, args.output,
+        csv_path = Path(args.csv).expanduser()
+        try:
+            before = {r["url"]: r["status"] for r in read_tasks(csv_path)[1]}
+        except Exception:  # run_csv reports CSV problems itself
+            before = {}
+        code = run_csv(csv_path, args.output,
                        Options(args.legato, args.keep_soft_pedal, args.pedal_ramps),
                        overwrite=args.overwrite, device=args.device, threads=args.threads)
+        if use_library and csv_path.is_file():
+            lib, filed = Library(), 0
+            for row in read_tasks(csv_path)[1]:
+                produced = (csv_path.parent / row["midi_path"]).resolve()
+                if row["status"] != "done" or not produced.is_file():
+                    continue
+                known = lib.by_source(row["url"])
+                if args.overwrite or before.get(row["url"]) != "done" or not (known and known["file_exists"]):
+                    file_result(lib, produced, row["name"] or produced.stem, source_type="url",
+                                source_url=row["url"])
+                    filed += 1
+            print(f"Library: {filed} MIDI file(s) saved to {MIDI_DIR.resolve()}")
+        return code
 
     try:
         files = find_audio_files(args.inputs)
@@ -58,8 +82,14 @@ def main(argv: list[str] | None = None) -> int:
                       pedal_ramps=args.pedal_ramps)
     done, failed, skipped = [], [], []
     todo = []
+    lib = Library() if use_library else None
     for f in files:
-        if not args.overwrite and (Path(args.output) / f"{f.stem}.mid").exists():
+        if lib is not None:
+            known = lib.by_source(str(f.resolve()))
+            exists = bool(known and known["file_exists"])
+        else:
+            exists = (Path(args.output) / f"{f.stem}.mid").exists()
+        if not args.overwrite and exists:
             skipped.append(f)
         else:
             todo.append(f)
@@ -80,10 +110,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{i}/{len(files)}] {f.name} … ", end="", flush=True)
         t0 = time.time()
         try:
-            info = convert_file(engine, f, args.output, options, overwrite=args.overwrite)
+            info = convert_file(engine, f, args.output, options, overwrite=args.overwrite or use_library)
+            midi = Path(info["files"]["midi"])
+            if lib is not None:
+                midi = Path(file_result(lib, midi, f.stem, source_type="local",
+                                        source_url=str(f.resolve()))["midi_path"])
             o = info["output"]
             print(f"ok in {time.time() - t0:.0f}s — {o['notes']} notes, velocity {o['velocity_min']}–"
-                  f"{o['velocity_max']}, {o['sustain_pedal_presses']} pedal presses → {Path(info['files']['midi']).name}",
+                  f"{o['velocity_max']}, {o['sustain_pedal_presses']} pedal presses → {midi.name}",
                   flush=True)
             done.append(f)
         except Exception as exc:  # keep going with the rest of the batch
@@ -94,9 +128,9 @@ def main(argv: list[str] | None = None) -> int:
             failed.append(f)
 
     print(f"\nDone: {len(done)} converted, {len(failed)} failed, {len(skipped)} skipped. "
-          f"MIDI files are in {Path(args.output).resolve()}")
+          f"MIDI files are in {(MIDI_DIR if use_library else Path(args.output)).resolve()}")
     for f in failed:
-        print(f"  failed: {f.name} (see extras/{f.stem}.error.log)")
+        print(f"  failed: {f.name} (see {Path(args.output) / 'extras' / f'{f.stem}.error.log'})")
     return 1 if failed else 0
 
 
