@@ -28,6 +28,7 @@ TITLE_FLAGS = {
     "hours": "long compilation",
     "8 bit": "not acoustic piano",
     "8-bit": "not acoustic piano",
+    "remix": "remix",
 }
 
 
