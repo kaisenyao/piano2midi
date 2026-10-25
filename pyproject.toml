@@ -16,6 +16,8 @@ dependencies = [
     "numpy",
     "imageio-ffmpeg",
     "yt-dlp[default]",
+    "openai",
+    "anthropic",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +25,8 @@ api = ["fastapi", "uvicorn", "python-multipart"]
 
 [project.scripts]
 piano2midi = "piano2midi.cli:main"
+piano2midi-chat = "piano2midi.chat:main"
+piano2midi-library = "piano2midi.library:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

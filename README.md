@@ -104,6 +104,49 @@ By default, cleanup trims same-pitch overlaps, removes soft-pedal events and
 ensures the sustain pedal is released at the end. Use `--legato`,
 `--keep-soft-pedal` and `--pedal-ramps` to adjust the behavior. See `./run.sh --help`.
 
+## Chat
+
+Ask for a piece in plain language. The assistant checks your local library first.
+If nothing matches, it searches YouTube, picks a real performance (it avoids
+falling-notes videos, tutorials and easy arrangements), runs it through the CSV
+flow above, and saves the MIDI in `output/MIDI Files/`. It tells you which video
+it chose and why.
+
+Set the keys once. They stay in your shell profile, never in the repository:
+
+```bash
+echo 'export OPENAI_API_KEY="..."' >> ~/.zshrc     # or ANTHROPIC_API_KEY
+echo 'export YOUTUBE_API_KEY="..."' >> ~/.zshrc    # YouTube Data API v3
+source ~/.zshrc
+```
+
+Then run:
+
+```bash
+./run.sh chat
+```
+
+Example requests: "Play Chopin's Nocturne Op. 9 No. 2 by Rubinstein",
+"something gentle by Debussy", "transcribe ~/Music/my-recording.m4a".
+In the chat, `/library` lists or searches the library, `/import <folder>` adds MIDI
+files, `/enrich` fills in composers and other-language titles, `/new` starts over
+and `/quit` exits.
+
+The default model is OpenAI `gpt-6-luna`, or Claude Haiku 5.5 when only
+`ANTHROPIC_API_KEY` is set. Choose another with, for example,
+`export PIANO2MIDI_MODEL=anthropic:claude-haiku-5-5`.
+
+The library is a single file, `output/library.db`. Manage it from the terminal:
+
+```bash
+./run.sh library import ~/Desktop/midi    # copy existing MIDI files in
+./run.sh library list
+./run.sh library enrich                   # add composers, aliases and tags
+```
+
+MIDI files you place in `output/MIDI Files/` yourself are added when the chat starts.
+Everything under `output/` stays out of Git.
+
 ## Limits and maintenance
 
 Works best on solo piano. There is no vocal or accompaniment separation, and
