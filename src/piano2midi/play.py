@@ -21,6 +21,7 @@ from .library import Library
 
 DEFAULT_PORT = "piano2midi"
 GAP_S = 2.0  # silence between pieces
+KEEPALIVE_S = 0.02  # with keepalive on, send MIDI Active Sensing at least this often so a Wi-Fi link stays awake
 SENT = {"note_on", "note_off", "control_change"}  # no program changes: they could switch the Pianoteq preset
 
 
@@ -65,6 +66,7 @@ class Player:
         self._thread: threading.Thread | None = None
         self._down: set[tuple[int, int]] = set()
         self.lateness: list[float] | None = None  # seconds each message went out late, when measuring
+        self.keepalive = os.environ.get("PIANO2MIDI_KEEPALIVE", "") not in {"", "0", "off", "no"}
 
     @property
     def position(self) -> float:
@@ -141,10 +143,7 @@ class Player:
                     if value >= 64:
                         self.port.send(mido.Message("control_change", channel=channel, control=64, value=value))
                 restored = True
-            delay = self._t0 + at - time.perf_counter()
-            if delay > 0 and self._stop.wait(delay):
-                return False
-            if self._stop.is_set():
+            if self._wait_until(self._t0 + at):
                 return False
             self.port.send(msg)
             if self.lateness is not None:
@@ -154,6 +153,21 @@ class Player:
             elif msg.type in {"note_on", "note_off"}:
                 self._down.discard((msg.channel, msg.note))
         return True
+
+    def _wait_until(self, when: float) -> bool:
+        """Sleep until perf_counter() reaches when, sending keepalives if enabled. True if stopped meanwhile."""
+        import mido
+
+        while True:
+            delay = when - time.perf_counter()
+            if delay <= 0:
+                return self._stop.is_set()
+            if not self.keepalive:
+                return self._stop.wait(delay) or self._stop.is_set()
+            if self._stop.wait(min(delay, KEEPALIVE_S)):
+                return True
+            if when - time.perf_counter() > 0.002:  # not just before a real message
+                self.port.send(mido.Message("active_sensing"))
 
     def release(self) -> None:
         """Lift every key that is still down and the sustain pedal."""
@@ -185,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", help=f'MIDI output name or part of it (default: PIANO2MIDI_PORT or "{DEFAULT_PORT}")')
     p.add_argument("--ports", action="store_true", help="list MIDI outputs and exit")
     p.add_argument("--timing", action="store_true", help="report how punctually this computer sent the notes")
+    p.add_argument("--keepalive", action="store_true",
+                   help="send MIDI Active Sensing every 20 ms so a Wi-Fi link does not doze (PIANO2MIDI_KEEPALIVE=1)")
     args = p.parse_args(argv)
 
     if args.ports:
@@ -211,10 +227,12 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"▶ {title} ({clock(mido.MidiFile(path).length)})", flush=True)
 
-    print(f"Playing on {player.port_name}. Ctrl+C to stop.")
+    print(f"Playing on {player.port_name}{' with keepalive' if args.keepalive or player.keepalive else ''}. "
+          "Ctrl+C to stop.")
     try:
         if args.timing:
             player.lateness = []
+        player.keepalive = player.keepalive or args.keepalive
         player.play(items, on_start=announce)
     except KeyboardInterrupt:  # play() has already lifted the keys and the pedal
         print("\nStopped.")
