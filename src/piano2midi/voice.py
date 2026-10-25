@@ -14,7 +14,6 @@ Install the extras once: uv pip install --python .venv/bin/python -e ".[voice]"
 
 from __future__ import annotations
 
-import difflib
 import hashlib
 import io
 import json
@@ -72,8 +71,6 @@ GREETINGS = {
            "Yes? What shall I play?", "Hi there, I'm listening!"],
 }
 # Greetings sound a little brighter than replies (less steady, a little style, a touch faster), not excited.
-# An ElevenLabs audio tag such as "[excited] " makes them much livelier.
-GREETING_TAG = ""
 GREETING_SETTINGS = {**VOICE_SETTINGS, "stability": 0.4, "style": 0.2, "speed": 1.05}
 # Silero voice activity detection tells speech from silence, the piano, and beeps.
 VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
@@ -126,24 +123,14 @@ FILLERS_START = (*dict.fromkeys(w.casefold() for w in WAKE_WORDS + assistant_nam
 FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6", "\u5443", "\u55ef")  # ba, a, ya, o, e, en
 
 
-def drop_name(t: str) -> str | None:
-    """t without a wake word or name at its start, allowing for homophones and near spellings; None if none.
-
-    Speech recognition may write the Chinese name with other characters of the same sound, or a near spelling of
-    an English one. t is lower-case without punctuation.
-    """
+def drop_chinese_name(t: str) -> str | None:
+    """t without a Chinese wake word at its start, also when written with other characters of the same sound
+    (speech recognition may write xiao ming tongxue with another ming); None if it does not start with one."""
     from pypinyin import lazy_pinyin
 
-    for name in WAKE_WORDS + assistant_names(WAKE_WORDS):
-        name = name.casefold()
-        if re.fullmatch(r"[\u4e00-\u9fff]+", name):
-            n = len(name)
-            if lazy_pinyin(t[:n]) == lazy_pinyin(name):
-                return t[n:].strip()
-        elif name.isascii():
-            words, k = t.split(" "), len(name.split())
-            if difflib.SequenceMatcher(None, " ".join(words[:k]), name).ratio() >= 0.8:
-                return " ".join(words[k:])
+    for name in WAKE_WORDS:
+        if re.fullmatch(r"[\u4e00-\u9fff]+", name) and lazy_pinyin(t[:len(name)]) == lazy_pinyin(name):
+            return t[len(name):].strip()
     return None
 
 
@@ -155,7 +142,7 @@ def strip_fillers(text: str) -> str:
     changed = True
     while changed and t:
         changed = False
-        rest = drop_name(t)
+        rest = drop_chinese_name(t)
         if rest is not None:
             t, changed = rest, True
         for f in FILLERS_START:
@@ -491,11 +478,11 @@ class Greeter:
         if not speaker.cloud:
             return
         texts = [(lang, t) for lang, lines in GREETINGS.items() for t in lines]
-        if any(not speaker.clip_path(GREETING_TAG + t, GREETING_SETTINGS).is_file() for _, t in texts):
+        if any(not speaker.clip_path(t, GREETING_SETTINGS).is_file() for _, t in texts):
             print("Preparing her greetings (once)…", flush=True)
         for lang, text in texts:
             try:
-                self.clips[lang].append((text, speaker.clip(GREETING_TAG + text, GREETING_SETTINGS)))
+                self.clips[lang].append((text, speaker.clip(text, GREETING_SETTINGS)))
             except Exception as exc:  # that one is left out; a beep stands in if none are left
                 print(f"  (could not prepare \"{text}\": {exc})")
                 if isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 402, 403):
