@@ -64,6 +64,7 @@ class Player:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._down: set[tuple[int, int]] = set()
+        self.lateness: list[float] | None = None  # seconds each message went out late, when measuring
 
     @property
     def position(self) -> float:
@@ -146,6 +147,8 @@ class Player:
             if self._stop.is_set():
                 return False
             self.port.send(msg)
+            if self.lateness is not None:
+                self.lateness.append(time.perf_counter() - (self._t0 + at))
             if msg.type == "note_on" and msg.velocity > 0:
                 self._down.add((msg.channel, msg.note))
             elif msg.type in {"note_on", "note_off"}:
@@ -181,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--all", action="store_true", help="play the whole playlist in order")
     p.add_argument("--port", help=f'MIDI output name or part of it (default: PIANO2MIDI_PORT or "{DEFAULT_PORT}")')
     p.add_argument("--ports", action="store_true", help="list MIDI outputs and exit")
+    p.add_argument("--timing", action="store_true", help="report how punctually this computer sent the notes")
     args = p.parse_args(argv)
 
     if args.ports:
@@ -209,9 +213,15 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Playing on {player.port_name}. Ctrl+C to stop.")
     try:
+        if args.timing:
+            player.lateness = []
         player.play(items, on_start=announce)
     except KeyboardInterrupt:  # play() has already lifted the keys and the pedal
         print("\nStopped.")
+    if player.lateness:
+        late = sorted(x * 1000 for x in player.lateness)
+        print(f"Timing on this computer: {len(late)} messages, median {late[len(late) // 2]:.1f} ms late, "
+              f"99% within {late[int(len(late) * 0.99)]:.1f} ms, worst {late[-1]:.1f} ms.")
     return 0
 
 
