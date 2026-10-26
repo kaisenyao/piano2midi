@@ -588,6 +588,8 @@ def main(argv: list[str] | None = None) -> int:
                 mic.drain()  # her greeting, not the request
                 speech.reset()
                 text = hear()
+                if not strip_fillers(text):
+                    text = ""  # already greeted; a repeated name is not another request
             answer = ""
             if text:
                 finish_language = "zh" if re.search(r"[\u3400-\u9fff]", text) else "en"

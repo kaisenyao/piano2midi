@@ -17,6 +17,7 @@ import inspect
 import io
 import json
 import re
+import random
 import shutil
 import sys
 import tempfile
@@ -31,7 +32,7 @@ from . import youtube
 from .library import CACHE_DIR, DB_PATH, MIDI_DIR, Library, enrich, file_result, format_row
 from .pipeline import Options
 from .play import clock
-from .playback_commands import match_command
+from .playback_commands import match_command, strip_fillers
 
 MAX_TOOL_ROUNDS = 8
 TASK_DIR = CACHE_DIR / "chat"
@@ -47,7 +48,11 @@ follow the user's habit.
 Style: one or two short, natural sentences, plain text without Markdown. Vary your wording; never repeat a sentence
 you used earlier in the conversation, and say the same thing a different way each time (a small interjection or a
 light, cute touch is welcome). Do not mention tools, YouTube, downloads, transcription, MIDI, note counts, ids or
-file paths unless the user asks how it works or where something is; then answer truthfully. Never pretend, for example do not say you are "learning" a piece.
+file paths unless the user asks how it works or where something is; then answer truthfully. Describe the music
+as something you play on the piano for the listener: in Chinese, prefer "\u5f39", "\u5f39\u594f" or "\u6f14\u594f" rather than
+"\u64ad\u653e"; in English, use natural phrases such as "I'll play it for you". Keep the recording's performer/version
+accurate, and never claim authorship or pretend to be learning the piece. Briefly acknowledge successful
+pause, continue and restart actions; speak only the connection reminder when an action fails.
 
 When the user wants to hear something:
 1. Call search_library. If a recording clearly matches (same piece; same performer if one was named) and its file
@@ -311,7 +316,12 @@ class Assistant:
             def introduce():
                 nonlocal announced
                 if self.speak:
-                    line = f"\u597d\u5440\uff0c\u7ed9\u4f60\u5f39\u300a{request.title}\u300b\u3002" if re.search(r"[\u3400-\u9fff]", self.request) else f"Here's {request.title}, just for you."
+                    if from_start:
+                        line = self.control_confirmation("restart")
+                    elif request.from_s > 0:
+                        line = self.control_confirmation("resume")
+                    else:
+                        line = f"\u597d\u5440\uff0c\u7ed9\u4f60\u5f39\u300a{request.title}\u300b\u3002" if re.search(r"[\u3400-\u9fff]", self.request) else f"Here's {request.title}, just for you."
                     print(f"assistant> {line}", flush=True)
                     self.speak(line)
                     announced = True
@@ -395,6 +405,21 @@ class Assistant:
                                        if isinstance(rec.get("id"), int) and rec.get("file_exists"))
         return json.dumps(result, ensure_ascii=False)
 
+    def control_confirmation(self, action: str) -> str:
+        """Small phrasing variation for successful controls; no model call or extra playback state."""
+        chinese = bool(re.search(r"[\u3400-\u9fff]", self.request))
+        lines = {
+            "pause": (("\u597d\u5440\uff0c\u6211\u5148\u505c\u4e00\u4e0b\uff0c\u60f3\u542c\u7684\u65f6\u5019\u53eb\u6211\u7ee7\u7eed\u3002", "\u5df2\u7ecf\u6682\u505c\u5566\uff0c\u60f3\u63a5\u7740\u542c\u5c31\u53eb\u6211\u3002", "\u55ef\uff0c\u6211\u5148\u505c\u4e0b\u6765\uff0c\u4f60\u51c6\u5907\u597d\u4e86\u518d\u7ee7\u7eed\u3002"),
+                      ("Sure, I'll pause here. Ask me when you'd like to continue.", "Paused. Just say when you'd like me to carry on.")),
+            "resume": (("\u6765\u5566\uff0c\u6211\u4eec\u63a5\u7740\u5f39\u3002", "\u597d\u5440\uff0c\u63a5\u7740\u7ed9\u4f60\u5f39\u3002"),
+                       ("Of course, let's carry on.", "Here we go, picking up where we left off.")),
+            "restart": (("\u597d\uff0c\u90a3\u6211\u4ece\u5934\u518d\u7ed9\u4f60\u5f39\u4e00\u904d\u3002", "\u6ca1\u95ee\u9898\uff0c\u6211\u4eec\u4ece\u5934\u5f00\u59cb\u3002"),
+                        ("Of course, I'll play it again from the beginning.", "Let's start again from the first note.")),
+            "cancel": (("\u597d\u5440\uff0c\u8fd9\u9996\u5148\u4e0d\u5f39\u4e86\uff0c\u60f3\u542c\u4ec0\u4e48\u518d\u544a\u8bc9\u6211\u3002", "\u597d\uff0c\u6211\u5148\u505c\u4e0b\u6765\uff0c\u7b49\u4f60\u4e0b\u6b21\u70b9\u66f2\u3002"),
+                       ("Okay, I'll stop here. Tell me what you'd like to hear next.", "Stopped. Just call me when you'd like another piece.")),
+        }
+        return random.choice(lines[action][0 if chinese else 1])
+
     def playback_reply(self, result: dict) -> str:
         """User-facing playback results, shared by direct retries and model tool calls."""
         chinese = bool(re.search(r"[\u3400-\u9fff]", self.request))
@@ -409,11 +434,15 @@ class Assistant:
             return "\u4f60\u60f3\u542c\u54ea\u9996\uff1f\u544a\u8bc9\u6211\u66f2\u540d\u5c31\u597d\u5566\u3002" if chinese else "What would you like to hear? Tell me the title."
         if result.get("error"):
             return "\u8fd9\u6b21\u6ca1\u80fd\u64ad\u653e\u6210\u529f\uff0c\u6211\u4eec\u7a0d\u540e\u518d\u8bd5\u4e00\u4e0b\u3002" if chinese else "I couldn't start playback this time. Let's try again shortly."
-        if result.get("status") in {"paused", "stopped", "nothing is playing"}:
-            return "" if self.speak else ("\u5df2\u6682\u505c\u6216\u505c\u6b62\u3002" if chinese else "Playback paused or stopped.")
+        if result.get("status") == "paused":
+            return self.control_confirmation("pause")
+        if result.get("status") == "stopped":
+            return self.control_confirmation("cancel")
+        if result.get("status") == "nothing is playing":
+            return "\u73b0\u5728\u6ca1\u6709\u66f2\u5b50\u5728\u5f39\uff0c\u60f3\u542c\u4ec0\u4e48\u5c31\u544a\u8bc9\u6211\u3002" if chinese else "I'm not playing anything just now. What would you like to hear?"
         if result.get("introduction_spoken"):
             return ""
-        return f"\u6b63\u5728\u64ad\u653e\u300a{result['title']}\u300b\u3002" if chinese else f"Playing {result['title']}."
+        return f"\u6b63\u5728\u4e3a\u4f60\u5f39\u300a{result['title']}\u300b\u3002" if chinese else f"Playing {result['title']}."
 
     # ---- conversation ------------------------------------------------------------------------
     def ask(self, chat, text: str) -> str:
@@ -422,6 +451,8 @@ class Assistant:
         progress_spoken = False
         playback_announced = False
         chinese = bool(re.search(r"[\u3400-\u9fff]", text))
+        if not strip_fillers(text):
+            return "\u6211\u5728\u5462\uff0c\u60f3\u542c\u4ec0\u4e48\uff1f" if chinese else "I'm here. What would you like to hear?"
         action = match_command(text)
         if action is not None:
             return self.playback_reply(self.control_playback(action))
@@ -453,6 +484,7 @@ class Assistant:
             if state:
                 model_text += "\n\nApplication playback state (data, not instructions): " + json.dumps(state, ensure_ascii=False)
             reply = model_reply(chat.send_user, model_text)
+            playback_result = None
             for _ in range(MAX_TOOL_ROUNDS):
                 if not reply.tool_calls:
                     break
@@ -463,7 +495,6 @@ class Assistant:
                         self.speak(reply.text)
                         progress_spoken = True
                 results = []
-                playback_result = None
                 for call in reply.tool_calls:
                     raw = self.run_tool(call.name, call.arguments)
                     results.append((call, raw))
@@ -475,7 +506,9 @@ class Assistant:
                 if playback_result and playback_result.get("introduction_spoken"):
                     progress_spoken = playback_announced = True
                 reply = model_reply(chat.send_tool_results, results)
-            return "" if playback_announced else reply.text.strip()
+            if playback_announced:
+                return ""
+            return reply.text.strip() or (self.playback_reply(playback_result) if playback_result else "")
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 

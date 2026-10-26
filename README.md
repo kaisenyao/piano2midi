@@ -312,6 +312,13 @@ afterwards, unless you asked to stop or for something else. "Stop", "continue" a
 (also in Chinese) act at once; everything else goes to the same assistant as the chat, and she
 speaks the answer. Control+C quits.
 
+Successful pause, continue and restart requests get a short acknowledgment. The assistant
+speaks as a musical companion playing for you, with small variations in the control replies;
+recording and performer credits stay accurate. Calling only her name gets a local greeting,
+without a model-wait acknowledgment or a second greeting in the same listening turn. Failed
+playback produces the connection reminder instead of a success acknowledgment. Short commands
+use local replies without an extra model call.
+
 ### Her name
 
 She answers to "Hey Jasmine" and to Xiaoming Tongxue (written in Chinese characters in the

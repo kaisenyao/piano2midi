@@ -313,6 +313,81 @@ class PlaybackTests(unittest.TestCase):
             start.assert_not_called()
         speaker.say.assert_called_once_with('\u597d\uff0c\u5148\u6682\u505c\u3002')
 
+    def test_short_pause_has_one_spoken_confirmation_and_keeps_position(self):
+        self.prime()
+        answer = self.a.ask(ScriptedChat(), "\u505c\u6b62\u64ad\u653e")
+        self.assertTrue(answer)
+        self.assertNotIn("\u64ad\u653e", answer)
+        speaker = Mock()
+        finish_interaction(self.a, speaker, answer, True)
+        speaker.say.assert_called_once_with(answer)
+        self.assertEqual(self.player.state, 'paused')
+        self.assertEqual(self.player.position, 22)
+
+    def test_resume_and_restart_introductions_are_spoken_once(self):
+        self.prime()
+        self.a.ask(ScriptedChat(), "\u7ee7\u7eed\u64ad\u653e")
+        self.player._thread.join()
+        self.assertEqual(len(self.spoken), 1)
+        self.assertIn("\u5f39", self.spoken[0])
+        self.assertEqual(self.player._from, 22)
+        self.a.pause(); self.spoken.clear()
+        answer = self.a.ask(ScriptedChat(), "\u4ece\u5934\u5f39")
+        self.player._thread.join()
+        self.assertEqual(answer, '')
+        self.assertEqual(len(self.spoken), 1)
+        self.assertTrue("\u4ece\u5934" in self.spoken[0] or "\u5f00\u59cb" in self.spoken[0])
+        self.assertEqual(self.player._from, 0)
+
+    def test_model_pause_uses_one_fallback_only_if_final_reply_is_empty(self):
+        for final_reply in ('', "\u597d\u5440\uff0c\u6211\u5148\u505c\u4e00\u4e0b\u3002"):
+            with self.subTest(final_reply=final_reply):
+                self.prime()
+                chat = ScriptedChat([call('control_playback', action='pause')], final_reply)
+                answer = self.a.ask(chat, "\u80fd\u5148\u6682\u505c\u4e00\u4e0b\u8fd9\u9996\u5417")
+                self.assertTrue(answer)
+                if final_reply: self.assertEqual(answer, final_reply)
+                self.assertEqual(self.spoken, [])
+                speaker = Mock()
+                finish_interaction(self.a, speaker, answer, True)
+                speaker.say.assert_called_once()
+
+    def test_failed_restart_does_not_speak_a_success_confirmation(self):
+        self.prime(); self.connected = False
+        answer = self.a.ask(ScriptedChat(), "\u4ece\u5934\u5f39")
+        self.assertIn("\u8bbe\u5907\u548c\u94a2\u7434", answer)
+        self.assertEqual(self.spoken, [])
+        self.assertEqual(self.a.pending.from_s, 0)
+        self.assertEqual(self.player.state, 'paused')
+
+    def test_name_only_request_is_local_and_preserves_playback(self):
+        self.prime()
+        for text in ("\u5c0f\u8317\u540c\u5b66", "\u5c0f\u660e\u540c\u5b66", "Hey Jasmine"):
+            with self.subTest(text=text):
+                chat = Mock()
+                answer = self.a.ask(chat, text)
+                self.assertTrue(answer)
+                self.assertNotIn("\u770b\u770b", answer)
+                chat.send_user.assert_not_called()
+                self.assertEqual(self.player.state, 'paused')
+                self.assertEqual(self.player.position, 22)
+
+    def test_repeated_name_after_greeting_is_not_sent_to_chat(self):
+        import numpy as np
+        import piano2midi.voice as voice
+        mic = Mock(); mic.read.side_effect = [np.zeros(voice.FRAME, dtype=np.int16), KeyboardInterrupt()]
+        wake = Mock(words=["\u5c0f\u8317\u540c\u5b66"]); wake.heard.return_value = "\u5c0f\u8317\u540c\u5b66"
+        speech = Mock(return_value=False)
+        greeter = Mock(return_value="\u6211\u5728\u5462")
+        assistant = Mock(player=None)
+        with patch('piano2midi.library.Library'),              patch('piano2midi.chat.index_midi_folder'),              patch('piano2midi.chat.Assistant', return_value=assistant),              patch('piano2midi.llm.make_chat', return_value=(Mock(), 'test')),              patch.multiple(voice, Speaker=Mock(), Transcriber=Mock(return_value=Mock(return_value="\u5c0f\u8317\u540c\u5b66")),
+                            WakeWord=Mock(return_value=wake), Speech=Mock(return_value=speech),
+                            Microphone=Mock(return_value=mic), Greeter=Mock(return_value=greeter),
+                            record=Mock(return_value=np.zeros(voice.FRAME))):
+            self.assertEqual(voice.main([]), 0)
+        greeter.assert_called_once()
+        assistant.ask.assert_not_called()
+
     def test_wait_message_only_once_during_model_delay(self):
         from concurrent.futures import TimeoutError
         reply = SimpleNamespace(text='\u60f3\u542c\u54ea\u9996\uff1f', tool_calls=[])
