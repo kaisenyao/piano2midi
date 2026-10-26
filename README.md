@@ -157,9 +157,23 @@ Choose another with, for example, `export PIANO2MIDI_MODEL=anthropic:claude-haik
 
 ## Playback
 
-piano2midi plays library pieces on Pianoteq by sending notes and pedal over MIDI, like someone
-playing a MIDI keyboard. Only notes and controllers are sent, so the Pianoteq preset stays as it
-is.
+piano2midi plays library pieces by sending notes and pedal over MIDI, like someone playing a MIDI
+keyboard. Only notes and controllers are sent, so the sound settings stay as they are. Where the
+sound comes from depends on which MIDI output you choose:
+
+| Sound | Connection | Settings |
+|---|---|---|
+| **Pianoteq on an iPad** (default) | Mac → network MIDI over Wi-Fi → iPad → USB → digital piano | none |
+| **The piano's own sound, Bluetooth** | Mac paired with the piano's Bluetooth MIDI | `PIANO2MIDI_PORT=FP-40` `PIANO2MIDI_LEAD=0` |
+| **The piano's own sound, USB** | USB cable from the Mac to the piano | `PIANO2MIDI_PORT=Roland` `PIANO2MIDI_LEAD=0` |
+| **Pianoteq on the same Mac** | IAC Driver | `PIANO2MIDI_PORT=IAC` `PIANO2MIDI_LEAD=0` |
+
+`PIANO2MIDI_PORT` is any part of the output's name; `./run.sh play --ports` lists them. The
+examples are for a Roland FP-40, which shows up as `FP-40 MIDI Bluetooth` and
+`Roland Digital Piano`; any digital piano that takes MIDI over Bluetooth or USB works the same
+way. Set the variables for one run (`PIANO2MIDI_PORT=FP-40 PIANO2MIDI_LEAD=0 ./run.sh voice`),
+or put `export` lines in your shell profile to keep them. They apply to `play`, the chat and the
+voice assistant alike; `play` also takes `--port` and `--lead`.
 
 One-time setup for Pianoteq on an iPad (the iPad can stay connected to a digital piano by USB):
 
@@ -170,8 +184,10 @@ One-time setup for Pianoteq on an iPad (the iPad can stay connected to a digital
 4. Select the iPad under Sessions and Directories and click Connect.
 5. In Pianoteq on the iPad, enable the network session as a MIDI input.
 
-For Pianoteq on the same Mac, enable the IAC Driver in Audio MIDI Setup, select it as Pianoteq's
-MIDI input, and add `--port IAC` (or set `PIANO2MIDI_PORT=IAC`).
+For Bluetooth, pair the piano in Audio MIDI Setup, not in System Settings (which connects
+Bluetooth audio): Window > Show MIDI Studio, click the Bluetooth button, then Connect next to the
+piano. For Pianoteq on the same Mac, enable the IAC Driver in Audio MIDI Setup and select it as
+Pianoteq's MIDI input.
 
 ```bash
 ./run.sh play someone like you    # best match in the library
@@ -181,17 +197,18 @@ MIDI input, and add `--port IAC` (or set `PIANO2MIDI_PORT=IAC`).
 ```
 
 Wi-Fi delivers notes unevenly, which breaks the rhythm. So on a Mac each note leaves one second
-early, together with the time it should sound, and the iPad plays it on time:
+early, together with the time it should sound, and the iPad plays it on time (a USB or Bluetooth
+connection to the piano does not need this, hence `PIANO2MIDI_LEAD=0` above):
 
 <p align="center">
   <img src="docs/timing.svg" alt="Sent when due, notes reach the piano unevenly; sent one second early with their time, the iPad waits and plays them evenly" width="900">
 </p>
 
 In return, playback starts, pauses and stops about one second after you ask. Pausing or stopping
-lifts all keys and the pedal, and continuing puts the pedal back where it was. Set `PIANO2MIDI_LEAD` (or
-`--lead`) in seconds to change the lead: `2` for an unsteady network, `0.5` for a quicker
-response, `0` to send each note when it is due. `--timing` reports how punctually this computer
-sent the notes.
+lifts all keys and the pedal, and continuing puts the pedal back where it was. Set
+`PIANO2MIDI_LEAD` (or `--lead`) in seconds to change the lead: `2` for an unsteady network, `0.5`
+for a quicker response, `0` to send each note when it is due. `--timing` reports how punctually
+this computer sent the notes. Control+C stops `play`.
 
 ## Voice
 
@@ -204,8 +221,8 @@ breath ("Hey Jasmine, stop"), or pause after the name: she answers in the langua
 you used, then listens. Anything that is playing pauses while you speak and continues
 afterwards, unless you asked to stop or for something else. "Stop", "continue" and "start over"
 (also in Chinese) act at once; everything else goes to the same assistant as the chat, and she
-speaks the answer. The first run asks for microphone access and downloads two small models
-(about 34 MB) into `output/.cache/models`.
+speaks the answer. Control+C quits. The first run asks for microphone access and downloads two
+small models (about 34 MB) into `output/.cache/models`.
 
 How it listens and speaks:
 
