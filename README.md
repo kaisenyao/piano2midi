@@ -65,7 +65,14 @@ Five steps the first time; step 5 is only for the voice assistant.
 
 Requires Python 3.10+ (or [uv](https://docs.astral.sh/uv/)). Transcription runs on macOS or
 Linux; playback with exact timing and the voice assistant are made for macOS. YouTube downloads
-also need [Deno](https://deno.com) or Node.js. From the project directory:
+also need [Deno](https://deno.com), or a Node.js runtime explicitly enabled for yt-dlp.
+If uv and Deno were installed in their default user directories, keep both on your PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$HOME/.deno/bin:$PATH"
+```
+
+Add that line to your shell profile so new terminals can find them. From the project directory:
 
 ```bash
 ./setup.sh
@@ -100,7 +107,7 @@ one way and set it up once:
 
 | | Sound | Connection | Settings |
 |---|---|---|---|
-| **A** | Pianoteq on an iPad (default) | Mac → network MIDI over Wi-Fi → iPad → USB → digital piano | none |
+| **A** | A network MIDI instrument, such as Pianoteq on an iPad | Mac → network MIDI → receiving device → digital piano | `PIANO2MIDI_PORT`; optional network checks below |
 | **B** | The piano's own sound | Mac paired with the piano's Bluetooth MIDI | `PIANO2MIDI_PORT`, `PIANO2MIDI_LEAD=0` |
 | **C** | The piano's own sound | USB cable from the Mac to the piano | `PIANO2MIDI_PORT`, `PIANO2MIDI_LEAD=0` |
 | **D** | Pianoteq on the same Mac | IAC Driver, inside the Mac | `PIANO2MIDI_PORT=IAC`, `PIANO2MIDI_LEAD=0` |
@@ -114,6 +121,35 @@ one way and set it up once:
 4. Select the iPad under Sessions and Directories and click Connect. It now shows under
    Participants.
 5. In Pianoteq on the iPad, enable the network session as a MIDI input.
+
+Run `./run.sh play --ports` and use the actual output name. Depending on macOS, the port
+may still be called `Network RTP Session 1` even after changing the session's local name.
+For that output, add these settings to your shell profile:
+
+```bash
+export PIANO2MIDI_PORT="Network RTP Session 1"
+# Optional checks for this network route only:
+export PIANO2MIDI_NETWORK_PORT="Network RTP Session 1"
+export PIANO2MIDI_NETWORK_PEER="iPad"
+```
+
+Use your receiving device's exact name for `PIANO2MIDI_NETWORK_PEER`; it need not be an iPad.
+Open a new terminal after saving. The optional check runs before playback, only when the selected
+output matches `PIANO2MIDI_NETWORK_PORT`. USB, Bluetooth and other outputs skip it. Apple command
+line tools are needed once to build the small checker, which is cached locally. Clear
+`PIANO2MIDI_NETWORK_PEER` to disable the check. If the driver status cannot be read, playback
+can still use the selected output rather than assuming that the device is disconnected.
+
+**After a restart or network interruption:** open the receiving instrument app, select the device
+in MIDI Network Setup, and click Connect. Check that it appears under Connected Peers. Merely
+seeing the output in `--ports` does not confirm the remote connection. Automatic reconnection
+and continuous monitoring during playback are not implemented.
+
+If a playback attempt fails, the piece and intended starting position are retained. After
+connecting manually, ask to retry. Continue resumes the saved position; an explicit request to
+start over begins at zero. There is no need to restart chat or voice just to retry the connection.
+The Mac cannot confirm whether the receiving app's audio is audible or its cable to the piano
+is connected.
 
 **B. The piano's own sound, over Bluetooth**
 
@@ -180,12 +216,16 @@ source ~/.zshrc
 ./run.sh voice                 # the first run asks for microphone access
 ```
 
+A Mac mini needs an external microphone, such as a USB camera microphone or a headset. Choose
+the input and output in System Settings > Sound. You can check the selected devices with
+`.venv/bin/python -m sounddevice`; grant microphone access to Terminal when macOS asks.
+
 Without ElevenLabs the macOS voice speaks and a beep stands in for her greetings. The first run
 downloads two small models (about 34 MB) into `output/.cache/models`. To give her other names,
 see [Her name](#her-name).
 
 Tip: to run piano2midi from any folder, add an alias to your profile, for example
-`alias p2m="$HOME/Documents/piano2midi/run.sh"`, then use `p2m chat`, `p2m voice` and so on.
+`alias p2m="$HOME/piano2midi/run.sh"`, then use `p2m chat`, `p2m voice` and so on.
 
 ## Chat
 
@@ -218,6 +258,9 @@ another site yt-dlp supports) to use that recording directly. For a long list of
 
 Plain language works too: "stop playing" pauses, "continue" picks up where it paused, "start
 over" plays from the beginning, and asking for another piece replaces the current one.
+A connection failure keeps the pending piece and its intended position; after reconnecting,
+ask to retry. Waiting for a connection keeps the position, while explicitly cancelling the
+request clears the pending selection.
 
 The model is OpenAI `gpt-6-luna`, or Claude Haiku 5.5 when only `ANTHROPIC_API_KEY` is set.
 Choose another with, for example, `export PIANO2MIDI_MODEL=anthropic:claude-haiku-5-5`.
@@ -266,6 +309,14 @@ echo 'export PIANO2MIDI_WAKE_WORDS="Hey Maestro,Hey Piano"' >> ~/.zshrc
   and kept in `output/.cache/voice`, and made again when you change them. Hear them all with
   `./run.sh voice --greetings`.
 
+After a piece finishes naturally, she leaves one second after the last scheduled MIDI events,
+then says a short, randomly chosen closing line. Pausing, stopping, changing pieces or failed
+playback does not trigger a closing line. Replies use the language of the latest request.
+While the chat model is taking longer than about three seconds, a short acknowledgment can
+fill the silence once. Playback introductions are spoken after the connection check and before
+the music starts. Diagnostic messages stay in the terminal; connection failures get a brief,
+nontechnical spoken reminder.
+
 ### How it listens
 
 - **Wake words:** heard on the computer by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
@@ -308,7 +359,9 @@ punctually this computer sent the notes.
 If nothing sounds, check the connection rather than the program. For the iPad, it must still be
 listed under Participants in MIDI Network Setup (the session can drop when a computer sleeps),
 with Pianoteq open. For Bluetooth, the piano must show as connected in Audio MIDI Setup. After
-reconnecting, start the chat or the voice assistant again.
+reconnecting, ask chat or voice to retry; the pending piece and position are kept.
+The network check is read-only and uses Apple RTP driver status when available; it cannot
+verify the receiving app's audio output or the device-to-piano cable.
 
 ## Transcribe
 
@@ -365,6 +418,8 @@ Set these in your shell profile; [Setup](#setup) says which ones you need.
 | `PIANO2MIDI_MODEL` | `openai:gpt-6-luna` | chat model |
 | `YOUTUBE_API_KEY` | | searching YouTube from the chat |
 | `PIANO2MIDI_PORT` | `piano2midi` | MIDI output, by part of its name |
+| `PIANO2MIDI_NETWORK_PORT` | `piano2midi` | full output name for optional network checks |
+| `PIANO2MIDI_NETWORK_PEER` | | exact receiving device name; empty disables network checks |
 | `PIANO2MIDI_LEAD` | `1` | seconds each note leaves early (macOS) |
 | `PIANO2MIDI_WAKE_WORDS` | Xiaoming Tongxue (in Chinese), `Hey Jasmine` | wake words |
 | `PIANO2MIDI_WAKE_THRESHOLD` | `0.2` | wake word sensitivity (lower hears more) |
@@ -386,6 +441,13 @@ support depends on yt-dlp; download failures are recorded in the CSV. To update 
 uv pip install --python .venv/bin/python --upgrade 'yt-dlp[default]'
 ```
 
+The project and library can live on a dedicated Mac mini at `~/piano2midi`. Keep the working
+copy outside cloud-synced folders. The library is local and is not synchronized with another
+Mac or uploaded with code; back up both `output/library.db` and `output/MIDI Files/`. A live
+database should be copied with SQLite's backup API. Keys remain in your shell profile.
+Launching chat or voice is manual; no login item, background connection service or automatic
+startup is installed.
+
 ## License and credits
 
 piano2midi is MIT licensed. Transcription uses
@@ -393,3 +455,19 @@ piano2midi is MIT licensed. Transcription uses
 MAESTRO dataset (CC BY-NC-SA 4.0); check the applicable terms before commercial use. The voice
 assistant uses [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) keyword spotting and
 [Silero VAD](https://github.com/snakers4/silero-vad).
+
+## Playback regression checks
+
+Run offline checks with `.venv/bin/python -m unittest discover -s tests`.
+For a user-run real-model check, run `.venv/bin/python tests/manual_playback_intents.py`.
+It tests 16 utterances against a temporary library and simulated playback; it does not use
+the microphone, speak, play actual MIDI, or change the production library. It uses the configured
+chat model and account. `--list` lists the cases without any API calls. Hardware playback and
+real microphone recognition still need a separate end-to-end check.
+
+Playback tools separate selection from current-piece control: `play_recording(id)` accepts only
+IDs offered by library search or transcription in the current request; `control_playback(action)`
+accepts no recording ID. Chat and voice share the same execution path and the application's
+current/pending playback state. Invalid selections are returned to the model for correction
+without overwriting the existing piece. Exact short commands are handled locally; natural
+requests use the model rather than an expanding set of phrase-matching rules.

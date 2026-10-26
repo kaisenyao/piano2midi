@@ -24,7 +24,6 @@ import subprocess
 import sys
 import tarfile
 import time
-import unicodedata
 import urllib.error
 import urllib.request
 import warnings
@@ -34,14 +33,13 @@ from pathlib import Path
 
 import numpy as np
 
+from .playback_commands import WAKE_WORDS, assistant_names, strip_fillers
+
 warnings.filterwarnings("ignore")
 
 SAMPLE_RATE = 16000
 FRAME = 1280  # 80 ms of audio per read
 FRAME_S = FRAME / SAMPLE_RATE
-# Chinese characters or English words. The default Chinese name is xiao ming tongxue.
-WAKE_WORDS = [w.strip() for w in os.environ.get("PIANO2MIDI_WAKE_WORDS", "\u5c0f\u8317\u540c\u5b66,Hey Jasmine").split(",")
-              if w.strip()]
 WAKE_THRESHOLD = float(os.environ.get("PIANO2MIDI_WAKE_THRESHOLD", "0.2"))  # lower hears more, wakes more by mistake
 WAKE_MODEL = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"  # Chinese and English, about 33 MB to download
 WAKE_MODEL_URL = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{WAKE_MODEL}.tar.bz2"
@@ -93,72 +91,6 @@ conversation. Your replies are spoken aloud by a young, cheerful voice, so sound
 sentence when you can and no lists. If the user asks for a link or a file path, say it is on the screen and include
 it; it is shown but not read aloud."""
 
-# Short commands handled without the model. Chinese phrases are written as escapes because the repository is
-# English-only; the pinyin is in the comments.
-COMMANDS = {  # simplified and traditional forms
-    "pause": {"stop", "pause", "stop playing", "stop it", "stop the music", "enough", "that's enough",
-              "\u505c", "\u505c\u4e00\u4e0b", "\u6682\u505c", "\u66ab\u505c", "\u505c\u6b62", "\u505c\u6b62\u64ad\u653e", "\u6682\u505c\u64ad\u653e", "\u66ab\u505c\u64ad\u653e", "\u591f\u4e86", "\u5920\u4e86", "\u522b\u5f39\u4e86", "\u5225\u5f48\u4e86", "\u5148\u505c\u4e00\u4e0b"},
-    # ting, ting yixia, zanting, tingzhi, tingzhi bofang, zanting bofang, gou le, bie tan le, xian ting yixia
-    "resume": {"play", "continue", "keep playing", "resume", "go on", "start playing", "continue playing",
-               "\u64ad\u653e", "\u5f00\u59cb\u64ad\u653e", "\u958b\u59cb\u64ad\u653e", "\u7ee7\u7eed", "\u7e7c\u7e8c", "\u7ee7\u7eed\u5f39", "\u7e7c\u7e8c\u5f48", "\u7ee7\u7eed\u64ad\u653e", "\u7e7c\u7e8c\u64ad\u653e", "\u63a5\u7740\u5f39", "\u63a5\u8457\u5f48", "\u63a5\u7740\u64ad\u653e", "\u63a5\u8457\u64ad\u653e"},
-    # bofang, kaishi bofang, jixu, jixu tan, jixu bofang, jiezhe tan, jiezhe bofang
-    "restart": {"start over", "from the beginning", "play it again", "play it from the beginning",
-                "\u4ece\u5934\u5f39", "\u5f9e\u982d\u5f48", "\u4ece\u5934\u5f00\u59cb", "\u5f9e\u982d\u958b\u59cb", "\u4ece\u5934\u64ad\u653e", "\u5f9e\u982d\u64ad\u653e", "\u91cd\u65b0\u5f39", "\u91cd\u65b0\u5f48"},
-    # congtou tan, congtou kaishi, congtou bofang, chongxin tan
-}
-
-
-def assistant_names(words: list[str]) -> list[str]:
-    """The names inside the wake words: "Hey Jasmine" -> "Jasmine"."""
-    return list(dict.fromkeys(re.sub(r"(?i)^hey\s+", "", w) for w in words))
-
-
-FILLERS_START = (*dict.fromkeys(w.casefold() for w in WAKE_WORDS + assistant_names(WAKE_WORDS)),
-                 "hey", "\u563f", "please", "okay", "ok", "uh", "um", "so",
-                 "\u8bf7", "\u5443", "\u55ef", "\u90a3\u4e2a", "\u90a3", "\u597d\u7684", "\u597d", "\u54e6", "\u554a")
-# qing, e, en, nage, na, hao de, hao, o, a
-FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6", "\u5443", "\u55ef")  # ba, a, ya, o, e, en
-
-
-def drop_chinese_name(t: str) -> str | None:
-    """t without a Chinese wake word at its start, also when written with other characters of the same sound
-    (speech recognition may write xiao ming tongxue with another ming); None if it does not start with one."""
-    from pypinyin import lazy_pinyin
-
-    for name in WAKE_WORDS:
-        if re.fullmatch(r"[\u4e00-\u9fff]+", name) and lazy_pinyin(t[:len(name)]) == lazy_pinyin(name):
-            return t[len(name):].strip()
-    return None
-
-
-def strip_fillers(text: str) -> str:
-    """The request without the name, "uh", "please" and the like around it, lower-case, no punctuation."""
-    t = unicodedata.normalize("NFKC", text).casefold()
-    t = re.sub(r"[^\w\s']", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    changed = True
-    while changed and t:
-        changed = False
-        rest = drop_chinese_name(t)
-        if rest is not None:
-            t, changed = rest, True
-        for f in FILLERS_START:
-            whole_word = t == f or t.startswith(f + " ") if f.isascii() else t.startswith(f)  # "so" is not "sorry"
-            if whole_word:
-                t, changed = t[len(f):].strip(), True
-        for f in FILLERS_END:
-            if t.endswith(f) and t != f:
-                t, changed = t[: -len(f)].strip(), True
-    return t
-
-
-def match_command(text: str) -> str | None:
-    """'pause', 'resume' or 'restart' when the whole request is one of the short commands."""
-    t = strip_fillers(text)
-    for action, phrases in COMMANDS.items():
-        if t in phrases:
-            return action
-    return None
 
 
 def speakable(text: str) -> str:
@@ -221,7 +153,7 @@ def wake_model() -> Path:
     folder = CACHE_DIR / "models" / WAKE_MODEL
     if all((folder / name).is_file() for name in WAKE_PARTS.values()):
         return folder
-    print("Downloading the wake word model (about 33 MB, once)…", flush=True)
+    print("Downloading the wake word model (about 33 MB, once)\u2026", flush=True)
     folder.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(WAKE_MODEL_URL, timeout=60) as resp, tarfile.open(fileobj=resp, mode="r|bz2") as tar:
         for member in tar:
@@ -476,7 +408,7 @@ class Greeter:
             return
         texts = [(lang, t) for lang, lines in GREETINGS.items() for t in lines]
         if any(not speaker.clip_path(t, GREETING_SETTINGS).is_file() for _, t in texts):
-            print("Preparing her greetings (once)…", flush=True)
+            print("Preparing her greetings (once)\u2026", flush=True)
         for lang, text in texts:
             try:
                 self.clips[lang].append((text, speaker.clip(text, GREETING_SETTINGS)))
@@ -514,24 +446,61 @@ class Greeter:
             print("No greetings: set ELEVENLABS_API_KEY and PIANO2MIDI_VOICE_ID.")
 
 
-def handle_command(assistant, action: str) -> bool:
-    """Run a short command; False when it cannot apply (nothing played yet), so the model answers instead."""
-    if action == "pause":
-        assistant.pause()
-        return True
-    return "error" not in assistant.play(from_start=action == "restart")
+FINISH_LINES = {
+    "zh": ["\u8fd9\u9996\u5f39\u5b8c\u5566\uff0c\u5e0c\u671b\u4f60\u559c\u6b22\u3002", "\u4f59\u97f5\u8fd8\u5728\u5462\uff0c\u60f3\u518d\u542c\u4e00\u9996\u5417\uff1f", "\u8c22\u8c22\u4f60\u542c\u6211\u5f39\u5b8c\uff0c\u8fd8\u60f3\u542c\u70b9\u4ec0\u4e48\uff1f"],
+    "en": ["That was lovely to play for you. Fancy another?", "And that's the last note. I hope you enjoyed it.",
+           "Thanks for listening. What shall we play next?"],
+}
+
+
+def finished_remark(player, language: str, previous: str = "") -> str | None:
+    """Consume a natural finish once, one second after the scheduled audio ends."""
+    if player is None or player.completed is None:
+        return None
+    if player.state != "stopped":
+        player.completed = None
+        return None
+    _, ended = player.completed
+    if time.perf_counter() < ended + 1.0:
+        return None
+    player.completed = None
+    choices = FINISH_LINES[language]
+    return random.choice([line for line in choices if line != previous])
+
+
+def finish_interaction(assistant, speaker, answer: str, was_playing: bool) -> None:
+    """Check automatic resumption before speaking a final reply, so a fault is reported once."""
+    def say(text):
+        if text:
+            print(f"assistant> {text}\n", flush=True)
+            speaker.say(text)
+
+    player = assistant.player
+    if was_playing and player is not None and player.state == "paused":
+        if assistant.touched_playback:
+            say(answer)
+            from .play import clock
+            print(f"  \u23f8 {player.current[1]}  {clock(player.position)}", flush=True)
+        else:
+            try:
+                # start checks the route, says the reply, then resumes; no second check or second reply.
+                player.start([player.current], from_s=player.position, on_ready=lambda: say(answer))
+            except LookupError:
+                say(assistant.playback_reply({"error": "playback_connection_unavailable"}))
+    else:
+        say(answer)
 
 
 def main(argv: list[str] | None = None) -> int:
     from .chat import INSTRUCTIONS, TOOLS, Assistant, index_midi_folder
     from .library import Library
     from .llm import make_chat
-    from .play import clock
 
     args = argv if argv is not None else sys.argv[1:]
     if "--greetings" in args:  # just listen to her greetings
         Greeter(Speaker()).preview()
         return 0
+
     lib = Library()
     index_midi_folder(lib)
     lib.write_playlist()
@@ -545,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
     assistant = Assistant(lib)
     assistant.speak = speaker.say  # "one moment" before a long search is spoken too
     try:
-        print("Loading speech recognition and the wake word…", flush=True)
+        print("Loading speech recognition and the wake word\u2026", flush=True)
         stt, wake, speech, mic = Transcriber(), WakeWord(), Speech(), Microphone()
         greet = Greeter(speaker)
     except ImportError as exc:
@@ -556,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Cannot start the wake word: {exc}", file=sys.stderr)
         return 2
     debug = "--debug" in args
-    print(f"piano2midi voice · model {label} · hearing {stt.label} · voice {speaker.label}")
+    print(f"piano2midi voice \xb7 model {label} \xb7 hearing {stt.label} \xb7 voice {speaker.label}")
     said = " or ".join(f'"{w}"' for w in wake.words)
     print(f"Say {said}, then your request. Control+C quits.\n", flush=True)
     recent: deque[np.ndarray] = deque(maxlen=PRE_ROLL_FRAMES)  # the last moments, for one-breath requests
@@ -577,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
             print("  (could not make out any words)", flush=True)
         return text
 
+    finish_language, last_finish = "zh", ""
     try:
         while True:
             frame = mic.read()
@@ -584,8 +554,19 @@ def main(argv: list[str] | None = None) -> int:
             speaking = speech(frame)
             word = wake.heard(frame)
             if not word:
+                remark = finished_remark(assistant.player, finish_language, last_finish)
+                if remark:
+                    last_finish = remark
+                    print(f"assistant> {remark}\n", flush=True)
+                    speaker.say(remark)
+                    mic.drain()
+                    wake.reset()
+                    speech.reset()
+                    recent.clear()
                 continue
             player = assistant.player
+            if player is not None:
+                player.completed = None  # a new request takes priority over a pending remark
             was_playing = player is not None and player.state == "playing"
             if was_playing:
                 player.pause()  # so the piano does not drown out the request
@@ -607,24 +588,17 @@ def main(argv: list[str] | None = None) -> int:
                 mic.drain()  # her greeting, not the request
                 speech.reset()
                 text = hear()
+            answer = ""
             if text:
+                finish_language = "zh" if re.search(r"[\u3400-\u9fff]", text) else "en"
                 print(f"you> {text}", flush=True)
-                action = match_command(text)
-                if not (action and handle_command(assistant, action)):
-                    try:
-                        answer = assistant.ask(chat, text)
-                    except Exception as exc:
-                        chat.reset()
-                        print(f"Model error: {exc}")
-                        answer = ""
-                    if answer:
-                        print(f"assistant> {answer}\n", flush=True)
-                        speaker.say(answer)
-            if was_playing and assistant.player.state == "paused":
-                if assistant.touched_playback:  # paused while listening and asked to stay paused
-                    print(f"  ⏸ {assistant.player.current[1]}  {clock(assistant.player.position)}", flush=True)
-                else:
-                    assistant.player.resume()
+                try:
+                    answer = assistant.ask(chat, text)
+                except Exception as exc:
+                    chat.reset()
+                    print(f"Model error: {exc}")
+                    answer = ""
+            finish_interaction(assistant, speaker, answer, was_playing)
             mic.drain()
             wake.reset()
             speech.reset()

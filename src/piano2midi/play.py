@@ -169,6 +169,7 @@ class Player:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._down: set[tuple[int, int]] = set()
+        self.completed: tuple[str, float] | None = None  # natural finish: title and audible end time
         self.lateness: list[float] | None = None  # seconds each message left late, when measuring
 
     @property
@@ -197,11 +198,22 @@ class Player:
                 if not self._play_file(path, from_s if i == 0 else 0.0):
                     return  # pause() or stop() sets the state
             self.state, self._offset = "stopped", 0.0
+            if self.current and not self._stop.is_set():
+                self.completed = (self.current[1], max(time.perf_counter(), self._last_when))
         finally:
             self.release()
 
-    def start(self, items: list[tuple[Path, str]], from_s: float = 0.0) -> None:
+    def check_connection(self) -> None:
+        from .network_midi import check_network_midi
+
+        if not check_network_midi(self.port_name):
+            raise LookupError("playback_connection_unavailable")
+
+    def start(self, items: list[tuple[Path, str]], from_s: float = 0.0, on_ready=None) -> None:
+        self.check_connection()
         self._halt()
+        if on_ready:
+            on_ready()
         self._stop.clear()  # here, not in the thread, so an immediate pause() cannot be lost
         self.current, self.state, self._offset = items[0], "playing", from_s
         self._t0, self._from, self._sent_to = time.perf_counter() + self.lead - from_s, from_s, from_s
@@ -235,6 +247,7 @@ class Player:
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=2)
         self._thread = None
+        self.completed = None
 
     def _send(self, msg, when: float | None = None) -> None:
         if self.lead and when is not None:
@@ -337,8 +350,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         player = Player(args.port, lead=args.lead)
+        player.check_connection()
     except LookupError as exc:
-        print(f"Cannot play: {exc}", file=sys.stderr)
+        print("暂时连不上琴，请检查设备和钢琴的连接。" if str(exc) == "playback_connection_unavailable" else f"Cannot play: {exc}", file=sys.stderr)
         return 2
 
     def announce(path: Path, title: str) -> None:
