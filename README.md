@@ -181,7 +181,8 @@ source ~/.zshrc
 ```
 
 Without ElevenLabs the macOS voice speaks and a beep stands in for her greetings. The first run
-downloads two small models (about 34 MB) into `output/.cache/models`.
+downloads two small models (about 34 MB) into `output/.cache/models`. To give her other names,
+see [Her name](#her-name).
 
 Tip: to run piano2midi from any folder, add an alias to your profile, for example
 `alias p2m="$HOME/Documents/piano2midi/run.sh"`, then use `p2m chat`, `p2m voice` and so on.
@@ -234,23 +235,46 @@ afterwards, unless you asked to stop or for something else. "Stop", "continue" a
 (also in Chinese) act at once; everything else goes to the same assistant as the chat, and she
 speaks the answer. Control+C quits.
 
-How it listens and speaks:
+### Her name
+
+She answers to "Hey Jasmine" and to Xiaoming Tongxue (written in Chinese characters in the
+code). To give her other names, list one or more, separated by commas:
+
+```bash
+echo 'export PIANO2MIDI_WAKE_WORDS="Hey Maestro,Hey Piano"' >> ~/.zshrc
+```
+
+- Write a Chinese name in Chinese characters; any name works, with no training. English names
+  must use words from the pronouncing dictionary; if one is unknown, `./run.sh voice` says so
+  when it starts.
+- The names are hers too: she calls herself by them (without "Hey"), and she greets you in
+  Chinese when you call her by a Chinese name, in English otherwise.
+- Good names have three to five syllables and are not words you say often. A short English name
+  works better with "Hey" in front.
+- If she often misses you, run `./run.sh voice --debug` to see what she hears, and lower
+  `PIANO2MIDI_WAKE_THRESHOLD` (default `0.2`, for example to `0.15`); if she wakes by herself,
+  raise it. If you say an English name differently from the dictionary, add your way to
+  `EXTRA_PRONUNCIATIONS` in `voice.py`, as "Jasmine" also accepts "jas-MEEN".
+
+### Her voice and greetings
+
+- **Voice:** the ElevenLabs voice in `PIANO2MIDI_VOICE_ID` (see [Setup](#setup), step 5). The
+  default model is `eleven_v4_turbo`; `PIANO2MIDI_TTS_MODEL=eleven_v4` is richer and slower.
+- **Greetings:** what she says when you pause after her name, a few lines each in Chinese and
+  English, picked at random. Change the lines in `GREETINGS` in `voice.py`, and how they are said
+  (a little livelier than her answers) in `GREETING_SETTINGS`. They are made once with her voice
+  and kept in `output/.cache/voice`, and made again when you change them. Hear them all with
+  `./run.sh voice --greetings`.
+
+### How it listens
 
 - **Wake words:** heard on the computer by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
-  keyword spotting, which takes any name without training. Set your own with
-  `PIANO2MIDI_WAKE_WORDS`, separated by commas: Chinese characters or English words, for
-  example `"Hey Maestro"`. English names are matched against a pronouncing dictionary plus a few
-  common non-native ways of saying them (`EXTRA_PRONUNCIATIONS` in `voice.py`). If it misses you,
-  lower `PIANO2MIDI_WAKE_THRESHOLD` (default `0.2`); if it wakes by itself, raise it.
+  keyword spotting.
 - **When you have finished:** [Silero](https://github.com/snakers4/silero-vad) voice activity
   detection tells your voice from silence and the piano, so the music or her own greeting is not
   taken for your request.
-- **Listening:** OpenAI `gpt-transcribe`, with your library's titles and names as spelling
+- **What you said:** OpenAI `gpt-transcribe`, with your library's titles and names as spelling
   hints and the languages in `PIANO2MIDI_LANGUAGES`.
-- **Speaking:** ElevenLabs, with the voice in `PIANO2MIDI_VOICE_ID`. The default model is
-  `eleven_v4_turbo`; `PIANO2MIDI_TTS_MODEL=eleven_v4` is richer and slower.
-- **Greetings:** made once with her voice and kept in `output/.cache/voice`. Change them in
-  `GREETINGS` in `voice.py`.
 
 `./run.sh voice --debug` shows which name she heard, what she answered, and when nothing was
 heard after the name.
