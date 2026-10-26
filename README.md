@@ -9,11 +9,12 @@
   <img src="docs/how-it-works.svg" alt="You ask for a piece; piano2midi on the Mac finds it in the library (or finds a recording and transcribes it) and sends the notes over Wi-Fi to Pianoteq on an iPad, which plays them through a digital piano" width="900">
 </p>
 
-piano2midi turns a piano recording (a YouTube or bilibili video, or an audio file) into a
-performance MIDI file with [Transkun](https://github.com/Yujia-Yan/Transkun). The files go into
-a local library. You can then ask for a piece in plain language, typed or spoken, and hear it on
-your piano: played by Pianoteq on an iPad that drives a digital piano, by the digital piano's own
-sound, or by Pianoteq on the same Mac.
+piano2midi turns a piano recording into a performance MIDI file with
+[Transkun](https://github.com/Yujia-Yan/Transkun): a video from YouTube, bilibili or any of the
+many other sites [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports, or an audio file of your
+own. The files go into a local library. You can then ask for a piece in plain language, typed or
+spoken, and hear it on your piano: played by Pianoteq on an iPad that drives a digital piano, by
+the digital piano's own sound, or by Pianoteq on the same Mac.
 
 ## Quick start
 
