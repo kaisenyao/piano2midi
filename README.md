@@ -83,12 +83,12 @@ ffmpeg comes with a dependency.
 
 ### 2. Add your keys
 
-Keys go in your shell profile (`~/.zshrc` on a Mac), never in the repository.
+Keys go in your shell profile (`~/.zshrc` on a Mac), never in the repository. For the
+recommended OpenAI setup, configure only the services you use:
 
 | Key | Needed for | Where to get it |
 |---|---|---|
 | `OPENAI_API_KEY` | the chat model and, for voice, speech recognition | [platform.openai.com](https://platform.openai.com) > API keys |
-| `ANTHROPIC_API_KEY` | instead of OpenAI for the chat model (voice still needs OpenAI) | [console.anthropic.com](https://console.anthropic.com) > API keys |
 | `YOUTUBE_API_KEY` | finding recordings on YouTube | [Google Cloud console](https://console.cloud.google.com): enable "YouTube Data API v3", then Credentials > Create API key |
 | `ELEVENLABS_API_KEY` | her voice (optional, see step 5) | [elevenlabs.io](https://elevenlabs.io), under API keys in your account |
 
@@ -99,6 +99,8 @@ source ~/.zshrc
 ```
 
 Without a YouTube key the chat still plays your library and recordings you link or point it to.
+Anthropic is an optional alternative, not a setup requirement; see [Optional chat provider](#optional-chat-provider).
+Local audio-to-MIDI transcription and direct MIDI playback do not need these cloud API keys.
 
 ### 3. Choose where the sound comes from
 
@@ -225,7 +227,7 @@ downloads two small models (about 34 MB) into `output/.cache/models`. To give he
 see [Her name](#her-name).
 
 Tip: to run piano2midi from any folder, add an alias to your profile, for example
-`alias p2m="$HOME/piano2midi/run.sh"`, then use `p2m chat`, `p2m voice` and so on.
+`alias p2m="$HOME/Documents/piano2midi/run.sh"`, then use `p2m chat`, `p2m voice` and so on.
 
 ## Chat
 
@@ -262,8 +264,40 @@ A connection failure keeps the pending piece and its intended position; after re
 ask to retry. Waiting for a connection keeps the position, while explicitly cancelling the
 request clears the pending selection.
 
-The model is OpenAI `gpt-6-luna`, or Claude Haiku 5.5 when only `ANTHROPIC_API_KEY` is set.
-Choose another with, for example, `export PIANO2MIDI_MODEL=anthropic:claude-haiku-5-5`.
+## Models and response flow
+
+These are the project defaults used in the tested Mac mini setup. Shell settings can override
+the chat, speech-recognition and speech-output models; the chat/voice startup banner shows the
+active selections.
+
+| Task | Model or engine | Runs on | Recommendation |
+|---|---|---|---|
+| Understand requests, choose pieces and call playback tools | OpenAI [`gpt-6-luna`](https://developers.openai.com/api/docs/models/gpt-6-luna) | OpenAI API | Keep the tested default for this focused assistant. |
+| Turn your spoken request into text | OpenAI [`gpt-transcribe`](https://developers.openai.com/api/docs/models/gpt-transcribe) | OpenAI API | Keep the default; set `PIANO2MIDI_LANGUAGES=zh,en` for Chinese and English hints. |
+| Speak replies and greetings | ElevenLabs `eleven_v4_turbo` | ElevenLabs API | Keep the tested voice and model; macOS speech is the fallback. |
+| Convert a piano recording into MIDI | Transkun `2.0.1`, pretrained `2.0` | This Mac, CPU by default | Keep CPU mode on the Mac mini; Apple MPS is opt-in. |
+| Detect the wake words | sherpa-onnx bilingual keyword-spotting model | This Mac | No cloud key needed. |
+| Detect speech and silence | Silero VAD through sherpa-onnx | This Mac | No cloud key needed. |
+
+A spoken request follows this path: local wake word and recording → OpenAI speech recognition
+→ chat and library lookup → search/download and local transcription if needed → connection
+check → spoken introduction → MIDI playback. Existing library pieces skip download and
+transcription. Network calls and local transcription both contribute to the wait, so response
+time varies. The Mac is not running the OpenAI or ElevenLabs models locally.
+
+The recommendation is to keep this working combination rather than change models during
+normal use. A stronger chat model is optional and does not replace reliable playback state or
+connection handling. No local language model, Claude Code installation or extra GPU is required
+for this setup.
+
+### Optional chat provider
+
+The code also supports Anthropic for chat. `ANTHROPIC_API_KEY` is needed only if you choose
+that provider; it is not used by the tested OpenAI setup. The project's Anthropic default is
+`claude-haiku-5-5`. To explicitly select it, set
+`PIANO2MIDI_MODEL=anthropic:claude-haiku-5-5` and supply your own Anthropic API key.
+Voice recognition still needs `OPENAI_API_KEY`. Claude Code is a separate development tool and
+is not required to run piano2midi. This alternative has not been part of the Mac mini validation.
 
 ## Voice
 
@@ -414,7 +448,6 @@ Set these in your shell profile; [Setup](#setup) says which ones you need.
 | Variable | Default | Used for |
 |---|---|---|
 | `OPENAI_API_KEY` | | chat model and speech recognition |
-| `ANTHROPIC_API_KEY` | | chat model, if you prefer Claude |
 | `PIANO2MIDI_MODEL` | `openai:gpt-6-luna` | chat model |
 | `YOUTUBE_API_KEY` | | searching YouTube from the chat |
 | `PIANO2MIDI_PORT` | `piano2midi` | MIDI output, by part of its name |
@@ -441,9 +474,10 @@ support depends on yt-dlp; download failures are recorded in the CSV. To update 
 uv pip install --python .venv/bin/python --upgrade 'yt-dlp[default]'
 ```
 
-The project and library can live on a dedicated Mac mini at `~/piano2midi`. Keep the working
-copy outside cloud-synced folders. The library is local and is not synchronized with another
-Mac or uploaded with code; back up both `output/library.db` and `output/MIDI Files/`. A live
+The project and library can live on a dedicated Mac mini at `~/Documents/piano2midi` when
+Documents is not cloud-synced. Keep the working copy outside cloud-synced folders if Documents
+synchronization is enabled. The library is local and is not synchronized with another Mac or
+uploaded with code; back up both `output/library.db` and `output/MIDI Files/`. A live
 database should be copied with SQLite's backup API. Keys remain in your shell profile.
 Launching chat or voice is manual; no login item, background connection service or automatic
 startup is installed.
