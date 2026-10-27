@@ -321,7 +321,7 @@ class Assistant:
                     elif request.from_s > 0:
                         line = self.control_confirmation("resume")
                     else:
-                        line = f"\u597d\u5440\uff0c\u7ed9\u4f60\u5f39\u300a{request.title}\u300b\u3002" if re.search(r"[\u3400-\u9fff]", self.request) else f"Here's {request.title}, just for you."
+                        line = f"\u597d\u5566\uff0c\u8fd9\u5c31\u7ed9\u4f60\u5f39\u300a{request.title}\u300b\u3002" if re.search(r"[\u3400-\u9fff]", self.request) else f"Here's {request.title}, just for you."
                     print(f"assistant> {line}", flush=True)
                     self.speak(line)
                     announced = True
