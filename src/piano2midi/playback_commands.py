@@ -33,33 +33,31 @@ FILLERS_START = (*dict.fromkeys(w.casefold() for w in WAKE_WORDS + assistant_nam
 FILLERS_END = ("please", "吧", "啊", "呀", "哦", "呃", "嗯")
 
 
-def drop_chinese_name(t: str) -> str | None:
-    """t without a Chinese wake word at its start, also when written with other characters of the same sound
-    (speech recognition may write xiao ming tongxue with another ming); None if it does not start with one."""
-    for name in WAKE_WORDS:
-        if t.startswith(name.casefold()):
-            return t[len(name):].strip()
+def spell_names(text: str) -> str:
+    """text with her Chinese names written as they are configured. Speech recognition hears only the sound and
+    may write 小茗同学 as 小明同学; the same goes for anything typed with other characters of the same sound."""
     try:
         from pypinyin import lazy_pinyin
     except ImportError:  # pypinyin is optional for text-only installations
-        return None
+        return text
     for name in WAKE_WORDS:
-        if re.fullmatch(r"[\u4e00-\u9fff]+", name) and lazy_pinyin(t[:len(name)]) == lazy_pinyin(name):
-            return t[len(name):].strip()
-    return None
+        if re.fullmatch(r"[\u4e00-\u9fff]+", name):
+            sound, n, i = lazy_pinyin(name), len(name), 0
+            while i + n <= len(text):
+                if text[i:i + n] != name and lazy_pinyin(text[i:i + n]) == sound:
+                    text = text[:i] + name + text[i + n:]
+                i += 1
+    return text
 
 
 def strip_fillers(text: str) -> str:
     """The request without the name, "uh", "please" and the like around it, lower-case, no punctuation."""
-    t = unicodedata.normalize("NFKC", text).casefold()
+    t = spell_names(unicodedata.normalize("NFKC", text)).casefold()
     t = re.sub(r"[^\w\s']", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     changed = True
     while changed and t:
         changed = False
-        rest = drop_chinese_name(t)
-        if rest is not None:
-            t, changed = rest, True
         for f in FILLERS_START:
             whole_word = t == f or t.startswith(f + " ") if f.isascii() else t.startswith(f)  # "so" is not "sorry"
             if whole_word:

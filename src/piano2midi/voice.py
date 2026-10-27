@@ -39,7 +39,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .playback_commands import WAKE_WORDS, assistant_names, is_chinese, strip_fillers
+from .play import clock
+from .playback_commands import WAKE_WORDS, assistant_names, is_chinese, spell_names, strip_fillers
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -326,7 +327,7 @@ class Transcriber:
             if not extra:
                 raise
             text = self.client.audio.transcriptions.create(**request)  # without the optional hints
-        return clean_transcript(str(text), self.prompt)
+        return spell_names(clean_transcript(str(text), self.prompt))
 
 
 class Speaker:
@@ -335,7 +336,7 @@ class Speaker:
     def __init__(self):
         self.key = os.environ.get("ELEVENLABS_API_KEY", "")
         self.cloud = bool(self.key and VOICE_ID)
-        self.label = f"ElevenLabs {TTS_MODEL}" if self.cloud else "macOS (no ELEVENLABS_API_KEY / PIANO2MIDI_VOICE_ID)"
+        self.label = f"ElevenLabs {TTS_MODEL}" if self.cloud else "macOS (set ELEVENLABS_API_KEY and PIANO2MIDI_VOICE_ID)"
 
     def stream(self, text: str) -> Iterator[np.ndarray]:
         """text as pieces of 24 kHz PCM, the first as soon as it arrives."""
@@ -486,14 +487,13 @@ def finish_interaction(assistant, speaker, answer: str, was_playing: bool) -> No
     if was_playing and player is not None and player.state == "paused":
         if assistant.touched_playback:
             say(answer)
-            from .play import clock
             print(f"  ⏸ {player.current[1]}  {clock(player.position)}", flush=True)
         else:
             try:
                 # start checks the route, says the reply, then resumes; no second check or second reply.
                 player.start([player.current], from_s=player.position, on_ready=lambda: say(answer))
-            except LookupError:
-                say(assistant.playback_reply({"error": "playback_connection_unavailable"}))
+            except LookupError as exc:
+                say(assistant.playback_reply(assistant.piano_missing(exc)))
     else:
         say(answer)
 
@@ -553,6 +553,7 @@ class PauseControl:
                 self.resume_player = self.player is not None and self.player.state == "playing"
                 if self.resume_player:
                     self.player.pause()  # keeps the position; the notes already sent still play
+                    print(f"  ⏸ {self.player.current[1]}  {clock(self.player.position)}", flush=True)
             else:
                 self.elapsed_pause += time.monotonic() - self.paused_at
                 self.paused_at = None
@@ -560,6 +561,7 @@ class PauseControl:
                 try:
                     if self.resume_player:
                         self.player.resume()
+                        print(f"  ▶ {self.player.current[1]}  {clock(self.player.position)}", flush=True)
                 finally:
                     self.resume_player = False
                     self.condition.notify_all()
@@ -570,6 +572,8 @@ class PauseControl:
             self.condition.notify_all()
             if self.player is not None:
                 self.player.stop()
+                if self.player.current is not None:  # as ./run.sh voice shows when it quits
+                    print(f"  ⏹ {self.player.current[1]}", flush=True)
 
 
 class VoiceParts:
@@ -580,8 +584,12 @@ class VoiceParts:
         self.speaker = Speaker()
         self.greeter = Greeter(self.speaker)
 
-    def describe(self, model: str) -> str:
-        return f"piano2midi voice · model {model} · hearing {self.stt.label} · voice {self.speaker.label}"
+    def describe(self, model: str, name: str = "voice", **more: str) -> str:
+        """The start-up lines, as ./run.sh chat prints its own: what does each job."""
+        from .chat import search_label, startup
+
+        return startup(name, chat=model, hearing=self.stt.label, voice=self.speaker.label, search=search_label(),
+                       **more)
 
 
 def voice_chat():
@@ -661,9 +669,27 @@ class Conversation:
         self.follow_up_s = START_TIMEOUT_S  # the request should start soon
         self.end_turn(sleep=False)
 
+    def piano_unavailable(self, error: str = "playback_connection_unavailable") -> None:
+        """The piano is gone (the phone continued without it, or it went away while playing): the piece waits
+        where it stopped, and she says so."""
+        line = self.assistant.playback_reply({"error": error})
+        self.status("speaking")
+        print(f"assistant> {line}\n", flush=True)
+        self.say(line)
+        self.follow_up_s = FOLLOW_UP_S
+        self.end_turn()
+
     def remark(self) -> None:
-        """A piece ended on its own: say so once, in the language of the last request."""
-        line = finished_remark(self.assistant.player, self.language, self.last_remark)
+        """Something happened to the piece on its own: the piano went away, or the piece ended. She says so once,
+        in the language of the last request."""
+        player = self.assistant.player
+        if player is not None and player.lost:
+            reason, player.lost = player.lost, None
+            print(f"  ⏸ {player.current[1]}  {clock(player.position)}", flush=True)
+            self.assistant.piano_missing(reason)
+            self.piano_unavailable("playback_connection_lost")
+            return
+        line = finished_remark(player, self.language, self.last_remark)
         if line:
             self.last_remark = line
             self.status("speaking")
@@ -784,7 +810,7 @@ class Conversation:
         except SessionEnded:
             raise
         except Exception as exc:  # start the chat afresh; a paused piece plays on
-            print(f"Model error: {exc}", flush=True)
+            print(f"  (model error: {exc}; started a new conversation)", flush=True)
             self.chat.reset()
         self.finish_playback(answer)
         self.follow_up_s = FOLLOW_UP_S

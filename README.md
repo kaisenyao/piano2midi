@@ -109,7 +109,7 @@ one way and set it up once:
 
 | | Sound | Connection | Settings |
 |---|---|---|---|
-| **A** | A network MIDI instrument, such as Pianoteq on an iPad | Mac → network MIDI → receiving device → digital piano | `PIANO2MIDI_PORT`; optional network checks below |
+| **A** | A network MIDI instrument, such as Pianoteq on an iPad | Mac → network MIDI → receiving device → digital piano | `PIANO2MIDI_PORT` |
 | **B** | The piano's own sound | Mac paired with the piano's Bluetooth MIDI | `PIANO2MIDI_PORT`, `PIANO2MIDI_LEAD=0` |
 | **C** | The piano's own sound | USB cable from the Mac to the piano | `PIANO2MIDI_PORT`, `PIANO2MIDI_LEAD=0` |
 | **D** | Pianoteq on the same Mac | IAC Driver, inside the Mac | `PIANO2MIDI_PORT=IAC`, `PIANO2MIDI_LEAD=0` |
@@ -126,32 +126,26 @@ one way and set it up once:
 
 Run `./run.sh play --ports` and use the actual output name. Depending on macOS, the port
 may still be called `Network RTP Session 1` even after changing the session's local name.
-For that output, add these settings to your shell profile:
+For that output, add this setting to your shell profile and open a new terminal:
 
 ```bash
 export PIANO2MIDI_PORT="Network RTP Session 1"
-# Optional checks for this network route only:
-export PIANO2MIDI_NETWORK_PORT="Network RTP Session 1"
-export PIANO2MIDI_NETWORK_PEER="iPad"
 ```
 
-Use your receiving device's exact name for `PIANO2MIDI_NETWORK_PEER`; it need not be an iPad.
-Open a new terminal after saving. The optional check runs before playback, only when the selected
-output matches `PIANO2MIDI_NETWORK_PORT`. USB, Bluetooth and other outputs skip it. Apple command
-line tools are needed once to build the small checker, which is cached locally. Clear
-`PIANO2MIDI_NETWORK_PEER` to disable the check. If the driver status cannot be read, playback
-can still use the selected output rather than assuming that the device is disconnected.
-
 **After a restart or network interruption:** open the receiving instrument app, select the device
-in MIDI Network Setup, and click Connect. Check that it appears under Connected Peers. Merely
-seeing the output in `--ports` does not confirm the remote connection. Automatic reconnection
-and continuous monitoring during playback are not implemented.
+in MIDI Network Setup, and click Connect. Check that it appears under Participants. Each time
+playback starts or continues, and about once a second while a piece plays, the Mac checks that the
+output is there and, for a network session, that a device has joined it (Participants): the iPad
+drops out when Pianoteq closes or the iPad goes offline, while the session's output stays. If the
+piano is not there, the piece waits where it stopped: voice and iPhone Voice say so at once, chat
+when you next ask to play. Once the device is back, the piece plays on from there.
+`./run.sh play --ports` shows how many participants a network session has.
 
 If a playback attempt fails, the piece and intended starting position are retained. After
 connecting manually, ask to retry. Continue resumes the saved position; an explicit request to
-start over begins at zero. There is no need to restart chat or voice just to retry the connection.
-The Mac cannot confirm whether the receiving app's audio is audible or its cable to the piano
-is connected.
+start over begins at zero. There is no need to restart chat, voice or iPhone Voice just to retry
+the connection. The Mac cannot confirm whether the receiving app's audio is audible or its cable
+to the piano is connected.
 
 **B. The piano's own sound, over Bluetooth**
 
@@ -306,7 +300,7 @@ is not required to run piano2midi. This alternative has not been part of the Mac
 ./run.sh voice
 ```
 
-Say "Hey Jasmine", or her Chinese name Xiaoming Tongxue, and ask for a piece. Say it in one
+Say "Hey Jasmine", or her Chinese name 小茗同学, and ask for a piece. Say it in one
 breath ("Hey Jasmine, stop"), or pause after the name: she greets you in the language of the name
 you used, then listens. Anything that is playing pauses while you speak and continues
 afterwards, unless you asked to stop or for something else. "Stop", "continue" and "start over"
@@ -325,8 +319,9 @@ use local replies without an extra model call.
 
 ### Her name
 
-She answers to "Hey Jasmine" and to Xiaoming Tongxue (written in Chinese characters in the
-code). To give her other names, list one or more, separated by commas:
+She answers to "Hey Jasmine" and to 小茗同学. Speech recognition hears only the sound of a name, so
+whatever characters it writes for 小茗同学 (小明同学, say) are shown and passed on as 小茗同学. To give
+her other names, list one or more, separated by commas:
 
 ```bash
 echo 'export PIANO2MIDI_WAKE_WORDS="Hey Maestro,Hey Piano"' >> ~/.zshrc
@@ -405,7 +400,7 @@ HTTPS, so the Mac makes its own small certificate authority, and the iPhone is t
    ./run.sh web-voice
    ```
 
-   It prints the page's address after `iPhone Voice:`, with the Mac's network address in it, for
+   It prints the page's address on its `address` line, with the Mac's network address in it, for
    example `https://192.168.1.20:8765/#token=...`. If macOS asks whether Python may accept
    incoming connections, allow it. Control+C stops it.
 
@@ -485,9 +480,7 @@ punctually this computer sent the notes.
 If nothing sounds, check the connection rather than the program. For the iPad, it must still be
 listed under Participants in MIDI Network Setup (the session can drop when a computer sleeps),
 with Pianoteq open. For Bluetooth, the piano must show as connected in Audio MIDI Setup. After
-reconnecting, ask chat or voice to retry; the pending piece and position are kept.
-The network check is read-only and uses Apple RTP driver status when available; it cannot
-verify the receiving app's audio output or the device-to-piano cable.
+reconnecting, ask chat, voice or iPhone Voice to retry; the pending piece and position are kept.
 
 ## Transcribe
 
@@ -543,10 +536,8 @@ Set these in your shell profile; [Setup](#setup) says which ones you need.
 | `PIANO2MIDI_MODEL` | `openai:gpt-6-luna` | chat model |
 | `YOUTUBE_API_KEY` | | searching YouTube from the chat |
 | `PIANO2MIDI_PORT` | `piano2midi` | MIDI output, by part of its name |
-| `PIANO2MIDI_NETWORK_PORT` | `piano2midi` | full output name for optional network checks |
-| `PIANO2MIDI_NETWORK_PEER` | | exact receiving device name; empty disables network checks |
 | `PIANO2MIDI_LEAD` | `1` | seconds each note leaves early (macOS) |
-| `PIANO2MIDI_WAKE_WORDS` | Xiaoming Tongxue (in Chinese), `Hey Jasmine` | wake words |
+| `PIANO2MIDI_WAKE_WORDS` | `小茗同学,Hey Jasmine` | wake words |
 | `PIANO2MIDI_WAKE_THRESHOLD` | `0.2` | wake word sensitivity (lower hears more) |
 | `PIANO2MIDI_LANGUAGES` | | languages you speak, e.g. `zh,en` |
 | `PIANO2MIDI_STT_MODEL` | `gpt-transcribe` | speech recognition model |

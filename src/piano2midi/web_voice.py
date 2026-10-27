@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hmac
 import json
+import logging
 from pathlib import Path
 import secrets
 import subprocess
@@ -212,9 +213,14 @@ async def voice_socket(socket: WebSocket):
                     command = payload['type']
                     if command in {'pause_session', 'continue_session'}:
                         # Applied before the next message is read, so later audio is already paused.
-                        await asyncio.to_thread(control.set_paused, command == 'pause_session')
-                        continue
-                    item = (control.epoch, command, None)
+                        try:
+                            await asyncio.to_thread(control.set_paused, command == 'pause_session')
+                            continue
+                        except LookupError as exc:  # continuing the piano found it gone: she says so, and it waits
+                            session.assistant.piano_missing(exc)
+                            item = (control.epoch, 'piano_unavailable', None)
+                    else:
+                        item = (control.epoch, command, None)
                 else:
                     await socket.close(code=1008, reason='Unsupported voice message')
                     return
@@ -277,21 +283,24 @@ def main(argv=None):
         host, new = prepare_https(tls)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         parser.exit(2, f'Cannot set up HTTPS: {exc}\n')
-    print(parts.describe(label))
+    print(parts.describe(label, 'iPhone Voice', address=f'https://{host}:{PORT}/#token={TOKEN}'))
     if new:  # the one step by hand, shown only now: the iPhone learns to trust this Mac
         print(f'\nFirst time on this Mac: let the iPhone trust it, once.\n\n'
               f'  1. Send     Finder shows {CA_FILE}: right-click > Share > AirDrop\n'
               f'  2. Install  iPhone Settings > General > VPN & Device Management > Install\n'
               f'  3. Trust    Settings > General > About > Certificate Trust Settings\n'
               f'              > turn on "piano2midi on {local_name().removesuffix(".local")}"\n'
-              f'  4. Open     iPhone Voice address in Safari > Share > Add to Home Screen\n\n'
+              f'  4. Open     the address above in Safari > Share > Add to Home Screen\n\n'
               f'  The file: {tls / CA_FILE}\n', flush=True)
         if sys.platform == 'darwin':
             subprocess.run(['open', '-R', str(tls / CA_FILE)], check=False)
-    print(f'iPhone Voice: https://{host}:{PORT}/#token={TOKEN}', flush=True)
-    print('Keep this address private; one phone at a time.', flush=True)
-    # Only what matters shows, as with ./run.sh voice: no request log, and no "running on 0.0.0.0" to mistake
-    # for the address. One Control+C stops it, even when a phone in the background never says goodbye.
+    said = ' or '.join(f'"{w}"' for w in parts.wake.words)
+    print(f'Keep the address private; one phone at a time.\n'
+          f'Tap the orb and say {said}, then your request. Control+C quits.\n', flush=True)
+    # Only what matters shows, as with ./run.sh voice: no request log, no "running on 0.0.0.0" to mistake for the
+    # address, and no error for quitting while a phone in the background never says goodbye (it stops in 2 s).
+    logging.getLogger('uvicorn.error').addFilter(
+        lambda record: 'timeout graceful shutdown exceeded' not in record.getMessage())
     uvicorn.run(app, host='0.0.0.0', port=PORT, ssl_certfile=str(tls / 'cert.pem'), ssl_keyfile=str(tls / 'key.pem'),
                 ws_max_size=8192, ws_max_queue=4, timeout_graceful_shutdown=2, log_level='warning')
     return 0

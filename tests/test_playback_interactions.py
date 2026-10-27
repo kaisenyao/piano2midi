@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -191,25 +192,6 @@ class PlaybackTests(unittest.TestCase):
             self.assertEqual(result['error'], 'invalid_playback_arguments')
         self.assertEqual(self.player.state, 'paused')
         self.assertEqual(self.player.position, 22)
-
-    def test_network_checks_skip_direct_ports_and_distinguish_unknown_from_missing(self):
-        import hashlib
-        import os
-        import piano2midi.network_midi as network
-        with patch('piano2midi.network_midi.sys.platform', 'darwin'), \
-                patch.dict(os.environ, {'PIANO2MIDI_NETWORK_PEER': 'Test Device',
-                                        'PIANO2MIDI_NETWORK_PORT': 'Network RTP Session 1'}), \
-                patch('piano2midi.library.CACHE_DIR', self.root), \
-                patch('piano2midi.network_midi.shutil.which', return_value='/usr/bin/swiftc'):
-            binary = self.root/'network-midi'/('check-'+hashlib.sha256(network._SWIFT.encode()).hexdigest()[:16])
-            binary.parent.mkdir(); binary.touch()
-            with patch('piano2midi.network_midi.subprocess.run') as run:
-                self.assertTrue(network.check_network_midi('USB Piano'))
-                self.assertTrue(network.check_network_midi('Bluetooth Piano'))
-                run.assert_not_called()
-            for code, status, expected in [(0,'READY',True),(0,'UNKNOWN',True),(1,'MISSING',False)]:
-                with patch('piano2midi.network_midi.subprocess.run', return_value=SimpleNamespace(returncode=code,stdout=status)):
-                    self.assertEqual(network.check_network_midi('Network RTP Session 1'), expected)
 
     def test_model_can_correct_wrong_selection_tool_to_control(self):
         self.prime()
@@ -500,6 +482,135 @@ class PlaybackTests(unittest.TestCase):
             self.a.ask(chat, 'Please play Sunny Day.')
         self.assertEqual(self.spoken, ['One moment, let me see.'])
 
+
+
+class ReconnectTests(unittest.TestCase):
+    """The piano disconnects and comes back while chat, voice or iPhone Voice runs."""
+
+    def setUp(self):
+        self.outputs, self.opened = ['Network piano2midi'], []
+        def open_output(name):
+            self.opened.append(Mock())
+            return self.opened[-1]
+        for patcher in (patch('piano2midi.play.output_names', side_effect=lambda: list(self.outputs)),
+                        patch('piano2midi.play.default_lead', return_value=0.0),
+                        patch('mido.open_output', side_effect=open_output),
+                        patch.object(Player, 'play')):  # nothing is sent
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.path = Path(folder.name)/'月光.mid'
+        self.path.touch()
+
+    def test_continue_says_the_piano_is_gone_then_plays_on_once_it_is_back(self):
+        a = Assistant(Mock())
+        a.request, a.player = '继续', Player()
+        self.addCleanup(a.player.close)
+        with contextlib.redirect_stdout(io.StringIO()):
+            a.player.start([(self.path, '月光')], 22)
+            a.pause()
+            self.outputs = []
+            result = a.play()
+            self.assertIn('还没连上琴', a.playback_reply(result))
+            self.assertEqual(a.pending.from_s, 22)
+            self.outputs = ['Network piano2midi']
+            result = a.play()
+        self.assertEqual((result['status'], result['from']), ('playing', '0:22'))
+        self.assertEqual(len(self.opened), 2)  # opened afresh: the piano that came back is a new output
+        self.opened[0].close.assert_called_once()
+        self.assertIs(a.player.port, self.opened[1])
+
+    def test_a_missing_piano_is_explained_in_one_line(self):
+        a = Assistant(Mock())
+        a.request, a.player = '继续', Player()
+        self.addCleanup(a.player.close)
+        a.player.current, a.player.state, a.player._offset = (self.path, '月光'), 'paused', 22
+        self.outputs = []
+        shown = io.StringIO()
+        with contextlib.redirect_stdout(shown):
+            result = json.loads(a.run_tool('control_playback', {'action': 'resume'}))
+        self.assertEqual(result['error'], 'playback_connection_unavailable')
+        self.assertEqual(shown.getvalue().splitlines(), [
+            '  (cannot play: no MIDI output matching "piano2midi" (available: none). '
+            'Check that the network MIDI session is on and the iPad is connected.)'])
+
+    def test_the_piano_going_away_mid_piece_pauses_where_the_sound_stopped(self):
+        midi = mido.MidiFile(); track = mido.MidiTrack(); midi.tracks.append(track)
+        step = round(mido.second2tick(0.02, midi.ticks_per_beat, 500000))
+        for _ in range(100):  # a short note every 40 ms, four seconds in all
+            track.append(mido.Message('note_on', note=60, velocity=64, time=step))
+            track.append(mido.Message('note_off', note=60, time=step))
+        midi.save(self.path)
+        player = Player()
+        self.addCleanup(player.close)
+        player.check_connection()
+        threading.Timer(0.3, self.outputs.clear).start()
+        with patch('piano2midi.play.LOOK_EVERY_S', 0.1):
+            started = time.perf_counter()
+            self.assertFalse(player._play_file(self.path))
+        self.assertLess(time.perf_counter() - started, 1.0, 'It stops soon after')
+        self.assertEqual(player.state, 'paused')
+        self.assertIn('no MIDI output', player.lost)
+        self.assertGreater(player.position, 0.1)
+        self.assertLess(player.position, 0.45)
+        self.outputs.append('Network piano2midi')
+        player.check_connection()  # the next try starts afresh
+        self.assertIsNone(player.lost)
+
+    def test_the_ipad_leaving_the_session_is_the_piano_going_away(self):
+        # macOS keeps the session's output while the iPad is away; only its Participants show it has gone.
+        joined = [1]
+        midi = mido.MidiFile(); track = mido.MidiTrack(); midi.tracks.append(track)
+        step = round(mido.second2tick(0.02, midi.ticks_per_beat, 500000))
+        for _ in range(100):
+            track.append(mido.Message('note_on', note=60, velocity=64, time=step))
+            track.append(mido.Message('note_off', note=60, time=step))
+        midi.save(self.path)
+        with patch('piano2midi.play.session_peers', side_effect=lambda name: joined[0]), \
+             patch('piano2midi.play.LOOK_EVERY_S', 0.1):
+            player = Player()
+            self.addCleanup(player.close)
+            player.check_connection()
+            threading.Timer(0.3, joined.__setitem__, (0, 0)).start()
+            self.assertFalse(player._play_file(self.path))
+            self.assertEqual(player.state, 'paused')
+            self.assertIn('the network MIDI session "Network piano2midi" has no participants', player.lost)
+            with self.assertRaises(LookupError):
+                player.check_connection()
+            joined[0] = 1
+            player.check_connection()
+        self.assertEqual(self.outputs, ['Network piano2midi'], 'The output itself never went away')
+
+    def test_ports_say_who_has_joined_a_network_session(self):
+        from piano2midi.play import main
+        self.outputs[:] = ['Network piano2midi', 'IAC Driver Bus 1']
+        shown = io.StringIO()
+        with patch('piano2midi.play.session_peers', side_effect=lambda name: 1 if name.startswith('Network') else None), \
+             contextlib.redirect_stdout(shown):
+            self.assertEqual(main(['--ports']), 0)
+        self.assertEqual(shown.getvalue().splitlines(),
+                         ['Network piano2midi  (network session, participants: 1)', 'IAC Driver Bus 1'])
+
+    def test_she_says_the_piece_not_the_file_name(self):
+        from piano2midi.chat import spoken_title
+        for title, said in [('周杰伦 - 搁浅 (MappleZS)', '搁浅'), ('Chopin - Nocturne Op. 9 No. 2 (Lang Lang)', 'Nocturne Op. 9 No. 2'),
+                            ('贝加尔湖畔（赵海洋）', '贝加尔湖畔'), ('Handel-Halvorsen - Passacaglia (Kassia)', 'Passacaglia'),
+                            ('Greensleeves', 'Greensleeves'), ('(MappleZS)', '(MappleZS)')]:
+            self.assertEqual(spoken_title(title), said)
+
+    def test_notes_on_their_way_keep_their_output(self):
+        player = Player()
+        self.addCleanup(player.close)
+        player.start([(self.path, '月光')])
+        player.pause()
+        player._last_when = time.perf_counter() + 5  # the last notes sent have yet to sound
+        player.start([(self.path, '月光')], 3)
+        self.assertEqual(len(self.opened), 1)
+        player.pause()
+        self.outputs = []
+        with self.assertRaises(LookupError):
+            player.start([(self.path, '月光')], 3)
 
 
 class WorkerTests(unittest.TestCase):

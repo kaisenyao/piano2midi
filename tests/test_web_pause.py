@@ -69,9 +69,11 @@ class PauseTests(unittest.TestCase):
         next_step.assert_not_called()
 
     def test_disconnect_stops_music_before_waiting_for_task_cleanup(self):
-        self.control.player = Mock(state='playing')
-        self.control.close()
+        self.control.player = Mock(state='playing', current=('p', '月光'))
+        with patch('builtins.print') as shown:
+            self.control.close()
         self.control.player.stop.assert_called_once()
+        shown.assert_called_once_with('  ⏹ 月光', flush=True)
 
     def test_followup_clock_excludes_pause_duration(self):
         with patch.object(voice.time, 'monotonic', return_value=100) as clock:
@@ -84,15 +86,17 @@ class PauseTests(unittest.TestCase):
             self.assertEqual(self.control.now(), 105)
 
     def test_only_music_playing_before_the_pause_resumes(self):
-        player = self.control.player = Mock(state='playing')
+        player = self.control.player = Mock(state='playing', current=('p', '月光'), position=3.0)
         player.pause.side_effect = lambda: setattr(player, 'state', 'paused')
         player.resume.side_effect = lambda: setattr(player, 'state', 'playing')
-        self.control.set_paused(True)
-        self.control.set_paused(True)
-        player.pause.assert_called_once()
-        self.control.set_paused(False)
-        self.control.set_paused(False)
-        player.resume.assert_called_once()
+        with patch('builtins.print') as shown:
+            self.control.set_paused(True)
+            self.control.set_paused(True)
+            player.pause.assert_called_once()
+            self.control.set_paused(False)
+            self.control.set_paused(False)
+            player.resume.assert_called_once()
+        self.assertEqual([c.args[0] for c in shown.call_args_list], ['  ⏸ 月光  0:03', '  ▶ 月光  0:03'])
         player.state = 'paused'
         self.control.set_paused(True)
         self.control.set_paused(False)

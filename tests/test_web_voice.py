@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -16,6 +17,91 @@ from piano2midi import web_voice as web
 
 
 class PhoneTests(unittest.TestCase):
+    def test_piano_disconnect_during_orb_pause_is_spoken_without_closing_session(self):
+        from piano2midi.chat import Assistant
+        from piano2midi.play import Player
+        spoken, controls = [], []
+        pcm = np.arange(240, dtype='<i2')
+        def speech(text):
+            spoken.append(text)
+            return iter([pcm])
+        parts = SimpleNamespace(stt=Mock(), wake=Mock(), speech=Mock(),
+                                speaker=SimpleNamespace(stream=speech), greeter=Mock())
+        player = Player(port=Mock())
+        self.addCleanup(player.close)
+        player.current, player.state = (Path('piece.mid'), '月光'), 'playing'
+        player._sent_to = 22
+        def opened(emit, control):
+            controls.append(control)
+            assistant = Assistant(Mock())
+            assistant.request = '播放月光'
+            assistant.player = control.player = player
+            conversation = voice.Conversation(assistant, Mock(), Mock(), parts, web.Phone(emit, control), control)
+            emit({'type': 'ready'})
+            return conversation
+        with patch.object(web, 'open_session', opened), \
+             patch.object(player, 'check_connection', side_effect=LookupError('piano disconnected')), \
+             TestClient(web.app) as client:
+            with client.websocket_connect('/voice', headers={'origin': 'http://testserver'}) as socket:
+                socket.send_json({'token': web.TOKEN})
+                self.assertEqual(socket.receive_json(), {'type': 'ready'})
+                socket.send_json({'type': 'pause_session'})
+                socket.send_json({'type': 'continue_session'})
+                self.assertEqual(socket.receive_json(), {'type': 'state', 'state': 'speaking'})
+                audio = socket.receive_json()
+                self.assertEqual(audio['type'], 'audio')
+                self.assertEqual(base64.b64decode(audio['data']), pcm.tobytes())
+                self.assertEqual(len(spoken), 1)
+                self.assertIn('还没连上琴', spoken[0])
+                self.assertEqual(socket.receive_json(), {'type': 'turn_end', 'sleep': False})
+                self.assertEqual(player.state, 'paused')
+                self.assertEqual(player.position, 22)
+                self.assertFalse(controls[0].paused)
+                socket.send_json({'type': 'resume'})
+                self.assertEqual(socket.receive_json(), {'type': 'state', 'state': 'conversation'})
+
+    def test_missing_piano_reply_reaches_phone_from_shared_terminal_logic(self):
+        from piano2midi.chat import PlaybackRequest
+        from piano2midi.library import Library
+        from piano2midi.play import Player
+        for played_before in (False, True):
+            with self.subTest(played_before=played_before), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'piece.mid'
+                path.touch()
+                lib = Library(Path(tmp) / 'library.db')
+                events, spoken, control = [], [], web.PauseControl()
+                pcm = np.arange(240, dtype='<i2')
+                def speech(text, spoken=spoken, pcm=pcm):
+                    spoken.append(text)
+                    return iter([pcm])
+                parts = SimpleNamespace(stt=Mock(return_value='继续播放'), wake=Mock(), speech=Mock(),
+                                        speaker=SimpleNamespace(stream=speech), greeter=Mock())
+                with patch('piano2midi.library.Library', return_value=lib), \
+                     patch('piano2midi.chat.index_midi_folder'), \
+                     patch.object(web, 'voice_chat', return_value=(Mock(), 'test')), \
+                     patch.object(web, 'voice_parts', return_value=parts), \
+                     patch('piano2midi.play.output_names', return_value=[]), \
+                     patch('builtins.print'):
+                    conversation = web.open_session(events.append, control)
+                    if played_before:  # opened while the piano was there; it has gone since
+                        with patch('piano2midi.play.output_names', return_value=['Network piano2midi']), \
+                             patch('piano2midi.play.default_lead', return_value=0.0), patch('mido.open_output'):
+                            conversation.assistant.player = Player()
+                            conversation.assistant.player.check_connection()
+                    pending = PlaybackRequest(path, '月光', from_s=22)
+                    conversation.assistant.pending = pending
+                    conversation.frames = [pcm]
+                    conversation.respond()
+                    expected = conversation.assistant.playback_reply({'error': 'playback_connection_unavailable'})
+                    self.assertEqual(spoken, [expected])
+                    self.assertIn('还没连上琴', expected)
+                    audio = [event for event in events if event['type'] == 'audio']
+                    self.assertEqual(len(audio), 1)
+                    self.assertEqual(base64.b64decode(audio[0]['data']), pcm.tobytes())
+                    self.assertEqual(events[-1], {'type': 'turn_end', 'sleep': False})
+                    self.assertEqual(conversation.assistant.pending, pending)
+                    conversation.close()
+
     def test_her_voice_goes_out_in_pieces_and_is_timed_for_the_piano(self):
         events, control = [], web.PauseControl()
         phone = web.Phone(events.append, control)
@@ -49,10 +135,13 @@ class PhoneTests(unittest.TestCase):
 
 class StartTests(unittest.TestCase):
     def test_one_command_serves_the_iphone_at_the_macs_address(self):
+        parts = SimpleNamespace(stt=SimpleNamespace(label='OpenAI x'), speaker=SimpleNamespace(label='ElevenLabs y'))
         with tempfile.TemporaryDirectory() as tmp:
             with patch('piano2midi.library.CACHE_DIR', Path(tmp)), \
                  patch.object(web, 'voice_chat', return_value=(Mock(), 'test')), \
-                 patch.object(web, 'voice_parts'), \
+                 patch.object(web, 'voice_parts', return_value=SimpleNamespace(
+                     describe=lambda model, name, **more: voice.VoiceParts.describe(parts, model, name, **more),
+                     wake=SimpleNamespace(words=['Hey Jasmine']))), \
                  patch('piano2midi.web_tls.prepare_https', return_value=('192.168.1.20', True)), \
                  patch('piano2midi.web_tls.local_name', return_value='Test-Mac.local'), \
                  patch('uvicorn.run') as run, patch('builtins.print') as shown, \

@@ -109,7 +109,7 @@ class ConversationTests(unittest.TestCase):
     def test_while_the_piano_plays_only_her_name_is_listened_for(self):
         self.c.frames = [np.ones(voice.FRAME, dtype=np.int16)]
         self.assistant.ask.return_value = '好啦，这就给你弹《传奇》。'
-        self.assistant.player = Mock(state='playing', completed=None)
+        self.assistant.player = Mock(state='playing', completed=None, lost=None)
         self.c.respond()
         self.assertEqual(self.out.events[-1], ('turn_end', True), 'No name-free follow-up')
         self.c.sleep()
@@ -133,7 +133,7 @@ class ConversationTests(unittest.TestCase):
         self.assistant.ask.assert_not_called()
 
     def test_a_piece_that_ends_on_its_own_gets_one_closing_remark(self):
-        self.assistant.player = Mock(state='stopped', completed=('传奇', time.perf_counter() - 2))
+        self.assistant.player = Mock(state='stopped', completed=('传奇', time.perf_counter() - 2), lost=None)
         self.frames(1)
         self.assertEqual(len(self.out.spoken), 1)
         self.assertIn(self.c.last_remark, voice.FINISH_LINES['zh'])
@@ -142,16 +142,47 @@ class ConversationTests(unittest.TestCase):
         self.frames(5)
         self.assertEqual(len(self.out.spoken), 1, 'Once')
 
+    def test_the_piano_going_away_while_playing_is_said_once(self):
+        from piano2midi.chat import Assistant
+        self.assistant.playback_reply = Assistant(Mock()).playback_reply
+        self.assistant.request = '我想听搁浅'
+        player = self.assistant.player = Mock(state='paused', completed=None, current=('p', '搁浅'), position=41.0,
+                                              lost='no MIDI output matching "piano2midi"')
+        self.frames(1)
+        self.assertEqual(len(self.out.spoken), 1)
+        self.assistant.piano_missing.assert_called_once_with('no MIDI output matching "piano2midi"')
+        self.parts.speaker.stream.assert_called_once_with(
+            Assistant(Mock()).playback_reply({'error': 'playback_connection_lost'}))
+        self.assertIsNone(player.lost)
+        self.c.sleep()
+        self.frames(5)
+        self.assertEqual(len(self.out.spoken), 1, 'Once')
+
+    def test_the_start_up_lines_name_what_does_each_job(self):
+        parts = SimpleNamespace(stt=SimpleNamespace(label='OpenAI x'), speaker=SimpleNamespace(label='ElevenLabs y'))
+        with patch.dict('os.environ', {'YOUTUBE_API_KEY': 'key'}):
+            self.assertEqual(voice.VoiceParts.describe(parts, 'OpenAI m').splitlines(), [
+                'piano2midi voice', '  chat     OpenAI m', '  hearing  OpenAI x', '  voice    ElevenLabs y',
+                '  search   YouTube'])
+        with patch.dict('os.environ', {'YOUTUBE_API_KEY': ''}):
+            self.assertIn('  search   off (set YOUTUBE_API_KEY)', voice.VoiceParts.describe(parts, 'OpenAI m'))
+
+    def test_her_chinese_name_is_written_as_configured_whatever_recognition_hears(self):
+        stt = voice.Transcriber.__new__(voice.Transcriber)
+        stt.client, stt.model, stt.prompt = Mock(), 'whisper-1', None
+        stt.client.audio.transcriptions.create.return_value = '小明同学，我想听小明的歌。'
+        self.assertEqual(stt(np.zeros(1600, dtype=np.float32), Mock()), '小茗同学，我想听小明的歌。')
+
     def test_bad_pcm_is_rejected(self):
         with self.assertRaises(ValueError):
             self.c.frame(np.zeros(10, dtype=np.int16))
 
     def test_only_her_name_in_one_breath_gets_a_greeting(self):
-        self.parts.stt.return_value = '小明同学'
-        self.frames(1, speaking=True, name='小明同学')
+        self.parts.stt.return_value = '小茗同学'
+        self.frames(1, speaking=True, name='小茗同学')
         self.frames(voice.GO_ON_FRAMES, speaking=True)
         self.frames(10, speaking=False)
-        self.parts.greeter.pick.assert_called_once_with('小明同学')
+        self.parts.greeter.pick.assert_called_once_with('小茗同学')
         self.assertEqual(self.out.events[-1], ('turn_end', False), 'Then she listens for the request')
 
     def test_a_recognition_failure_loses_the_request_not_the_conversation(self):
@@ -162,7 +193,7 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(self.c.state, 'waiting')
 
     def test_a_model_failure_starts_the_chat_afresh_and_the_piano_plays_on(self):
-        player = self.assistant.player = Mock(state='playing', completed=None, current=('p', '传奇'), position=3.0)
+        player = self.assistant.player = Mock(state='playing', completed=None, lost=None, current=('p', '传奇'), position=3.0)
         self.c.begin()
         player.state = 'paused'
         self.c.frames = [np.zeros(voice.FRAME, dtype=np.int16)]
@@ -172,7 +203,7 @@ class ConversationTests(unittest.TestCase):
         player.start.assert_called_once()  # at once, not after the follow-up window
 
     def test_a_paused_piece_stays_paused_through_a_greeting(self):
-        self.assistant.player = Mock(state='playing', completed=None)
+        self.assistant.player = Mock(state='playing', completed=None, lost=None)
         self.c.begin()
         self.assistant.player.pause.assert_called_once()
         self.assistant.player.state = 'paused'

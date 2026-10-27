@@ -124,7 +124,7 @@ class AnthropicChat:
 def make_chat(instructions: str, tools: list[dict]):
     provider, model = model_spec()
     cls = OpenAIChat if provider == "openai" else AnthropicChat
-    return cls(model, instructions, tools), f"{provider}:{model}"
+    return cls(model, instructions, tools), f"{'OpenAI' if provider == 'openai' else 'Anthropic'} {model}"
 
 
 def complete_json(prompt: str) -> dict:

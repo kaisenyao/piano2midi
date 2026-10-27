@@ -182,6 +182,22 @@ class Worker:
                     future.set_exception(exc)
 
 
+def startup(name: str, **jobs: str) -> str:
+    """The first lines of chat, voice and iPhone Voice: what does each job, one per line, aligned."""
+    return "\n".join([f"piano2midi {name}", *(f"  {job:<9}{what}" for job, what in jobs.items())])
+
+
+def search_label() -> str:
+    return "YouTube" if youtube.api_key() else "off (set YOUTUBE_API_KEY)"
+
+
+def spoken_title(title: str) -> str:
+    """The piece alone, as she says it: "周杰伦 - 搁浅 (MappleZS)" is 搁浅, "Chopin - Nocturne Op. 9 No. 2 (Lang Lang)"
+    is Nocturne Op. 9 No. 2. The full title stays on screen."""
+    piece = title.split(" - ", 1)[-1]
+    return re.sub(r"\s*[(（][^()（）]*[)）]\s*$", "", piece).strip() or title
+
+
 def _brief(rec: dict) -> dict:
     keys = ("id", "title", "composer", "performer", "aliases", "tags", "source_type", "source_url",
             "midi_path", "notes", "pedal_presses", "duration_s", "file_exists", "score")
@@ -308,7 +324,7 @@ class Assistant:
         from .play import Player
 
         if self.player is None:
-            self.player = Player()  # LookupError when the MIDI output is missing
+            self.player = Player()  # opens the output each time playback starts
         return self.player
 
     def play(self, id: int | None = None, from_start: bool = False) -> dict:
@@ -352,7 +368,8 @@ class Assistant:
                     elif request.from_s > 0:
                         line = self.control_confirmation("resume")
                     else:
-                        line = f"好啦，这就给你弹《{request.title}》。" if is_chinese(self.request) else f"Here's {request.title}, just for you."
+                        piece = spoken_title(request.title)
+                        line = f"好啦，这就给你弹《{piece}》。" if is_chinese(self.request) else f"Here's {piece}, just for you."
                     print(f"assistant> {line}", flush=True)
                     self.speak(line)
                     announced = True
@@ -362,8 +379,7 @@ class Assistant:
             if self.player and self.player.state == "playing":
                 self.player.pause()
             self.pending = request
-            print(f"Playback unavailable: {exc}", flush=True)
-            return {"error": "playback_connection_unavailable"}
+            return self.piano_missing(exc)
         self.pending = None
         print(f"  ▶ {player.current[1]}  {clock(player.position)}", flush=True)
         return {"status": "playing", "title": player.current[1], "from": clock(player.position),
@@ -402,6 +418,11 @@ class Assistant:
             print(f"  ⏹ {self.player.current[1]}", flush=True)
         return {"status": "stopped"}
 
+    def piano_missing(self, reason) -> dict:
+        """The piano is not there. Why shows here, once; the listener gets a brief reminder (playback_reply)."""
+        print(f"  (cannot play: {reason})", flush=True)
+        return {"error": "playback_connection_unavailable"}
+
     def close(self) -> None:
         """Stop playback before the program exits, letting the notes already sent finish."""
         if self.player:
@@ -430,7 +451,8 @@ class Assistant:
             result = {"error": f"bad arguments: {exc}"}
         except Exception as exc:
             result = {"error": f"{type(exc).__name__}: {exc}"}
-        if result.get("error"):  # the model words it for the listener; the reason stays visible here
+        # The model words a failure for the listener; the reason stays visible here (piano_missing gives its own).
+        if result.get("error") and result["error"] != "playback_connection_unavailable":
             print(f"  · {name} failed: {result['error']}", flush=True)
         if name in {"search_library", "transcribe_url", "transcribe_local"}:
             offered = result.get("results", []) if name == "search_library" else [result]
@@ -459,6 +481,9 @@ class Assistant:
         if result.get("error") == "playback_connection_unavailable":
             return ("咦，好像还没连上琴呢。方便帮我检查一下设备和钢琴的连接吗？准备好后，随时叫我播放就好啦。"
                     if chinese else "Oh, I couldn't connect to the piano. Could you check the connection between your device and piano? Ask me to play when you're ready.")
+        if result.get("error") == "playback_connection_lost":
+            return ("咦，琴好像断开了，我先停在这里。连好以后叫我继续就好啦。"
+                    if chinese else "Oh, the piano seems to have disconnected, so I've stopped here. Ask me to carry on once it's back.")
         if result.get("error") == "recording_unavailable":
             return "这首曲子的文件暂时找不到，请重新选一首。" if chinese else "That recording is unavailable. Please choose a piece again."
         if result.get("error") == "recording_not_found":
@@ -591,9 +616,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Cannot start the chat model: {exc}", file=sys.stderr)
         return 2
     assistant = Assistant(lib)
-    yt = "on" if youtube.api_key() else "off (set YOUTUBE_API_KEY)"
-    print(f"piano2midi chat · model {label} · YouTube search {yt}")
-    print(f"Library: {lib.count()} recording(s) in {DB_PATH} · MIDI folder: {MIDI_DIR}")
+    print(startup("chat", chat=label, search=search_label(),
+                  library=f"{lib.count()} recording(s) in {DB_PATH} · MIDI folder: {MIDI_DIR}"))
     print(HELP + "\n")
     try:
         import readline  # noqa: F401  (line editing and history)
@@ -647,7 +671,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         except Exception as exc:
             chat.reset()
-            print(f"Model error: {exc}\n(started a new conversation)")
+            print(f"  (model error: {exc}; started a new conversation)")
             continue
         if answer:
             print(f"\nassistant> {answer}\n")
