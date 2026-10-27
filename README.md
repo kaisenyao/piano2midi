@@ -284,6 +284,7 @@ A spoken request follows this path: local wake word and recording → OpenAI spe
 check → spoken introduction → MIDI playback. Existing library pieces skip download and
 transcription. Network calls and local transcription both contribute to the wait, so response
 time varies. The Mac is not running the OpenAI or ElevenLabs models locally.
+Before online search or preparation, she acknowledges the wait without promising a completion time.
 
 The recommendation is to keep this working combination rather than change models during
 normal use. A stronger chat model is optional and does not replace reliable playback state or

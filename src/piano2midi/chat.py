@@ -57,10 +57,10 @@ pause, continue and restart actions; speak only the connection reminder when an 
 When the user wants to hear something:
 1. Call search_library. If a recording clearly matches (same piece; same performer if one was named) and its file
    exists, call play_recording with its id and say in a few words what you are playing.
-2. If it is not there, write one short, friendly sentence that you will go and find it and that it takes a minute or
-   two, worded differently each time (for example "Ooh, nice pick! Give me a minute to find a lovely recording.",
-   "On it, back in a minute or two!", "Let me hunt that one down, it won't take long."), in the same response as
-   your search_youtube call. Search with the composer, piece, catalog number, performer if named, and "piano".
+2. If it is not there, write one short, friendly sentence that says you will find it AND explicitly asks the
+   listener to wait (for example "I'll find a lovely piano performance for you; please give me a moment.").
+   Vary the wording without predicting a duration or promising it will be ready immediately. Include the sentence
+   with your search_youtube call. Search with the composer, piece, catalog number, performer if named, and "piano".
    Choose the best candidate yourself:
    - prefer recordings where the piano carries the music: solo piano first, piano with voice second, never a band
      mix or a remix; a real human performance by a named pianist, a good recording, and a duration that fits;
@@ -75,9 +75,9 @@ When the user wants to hear something:
 4. If there is no good piano version, say so kindly and do not play something poor.
 If you are not sure which piece the user means (a misspelled or ambiguous name), ask a short question such as
 "Do you mean John Legend's All of Me?". If the request is merely vague ("a Chopin nocturne"), pick a well-known
-piece and say which. If the user pastes a video link, say it takes a minute or two, call transcribe_url with that
-link (title empty unless the user named the piece) and play it. For a local audio file path use transcribe_local
-in the same way.
+piece and say which. If the user pastes a video link, briefly say you will prepare it and explicitly ask them to
+wait, without estimating a duration. Call transcribe_url with that link (title empty unless the user named the
+piece) and play it. For a local audio file path use transcribe_local in the same way.
 
 Playback:
 - Use play_recording(id) ONLY to select a recording returned by search_library or a successful transcription
@@ -115,7 +115,7 @@ TOOLS = [
          "max_results": {"type": "integer", "description": "1-15, default 8"}}, "required": ["query"]}},
     {"name": "transcribe_url",
      "description": "Download the audio of one video (YouTube, bilibili or another site yt-dlp supports) through "
-                    "the piano2midi CSV flow, transcribe it to MIDI and add it to the library. Takes a few minutes.",
+                    "the piano2midi CSV flow, transcribe it to MIDI and add it to the library.",
      "parameters": {"type": "object", "properties": {
          "url": {"type": "string"},
          "title": {"type": "string", "description": "clean display title used as the file name; "
@@ -233,7 +233,7 @@ class Assistant:
         if not rows:
             rows = [{c: "" for c in fields} | {"url": url, "name": safe_name(title) if title else ""}]
         save_tasks(csv_path, fields, rows)
-        print(f"  \xb7 getting {title or url} ready (1\u20133 minutes)\u2026", flush=True)
+        print(f"  \xb7 getting {title or url} ready\u2026", flush=True)
         with contextlib.redirect_stdout(io.StringIO()):  # the batch runner's progress is noise here
             run_csv(csv_path, work, Options())
         _, rows = read_tasks(csv_path)
@@ -493,9 +493,16 @@ class Assistant:
                     print(f"\nassistant> {reply.text.strip()}\n", flush=True)
                     if self.speak:
                         self.speak(reply.text)
-                        progress_spoken = True
+                    progress_spoken = True
                 results = []
                 for call in reply.tool_calls:
+                    # Tool-only model replies must not start a long step silently.
+                    if not progress_spoken and call.name in {"search_youtube", "transcribe_url", "transcribe_local"}:
+                        line = "\u6211\u53bb\u51c6\u5907\u4e00\u4e0b\uff0c\u7a0d\u7b49\u6211\u4e00\u4f1a\u513f\u3002" if chinese else "Let me get this piece ready for you."
+                        print(f"assistant> {line}", flush=True)
+                        if self.speak:
+                            self.speak(line)
+                        progress_spoken = True
                     raw = self.run_tool(call.name, call.arguments)
                     results.append((call, raw))
                     if call.name in {"play_recording", "control_playback"}:

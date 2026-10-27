@@ -397,6 +397,47 @@ class PlaybackTests(unittest.TestCase):
             self.a.ask(Mock(), '\u60f3\u542c\u6b4c')
         self.assertEqual(self.spoken, ['\u597d\u5440\uff0c\u6211\u770b\u770b\u3002'])
 
+    def test_silent_model_announces_before_long_tools_only_once(self):
+        for first_tool in ('search_youtube', 'transcribe_url', 'transcribe_local'):
+            with self.subTest(first_tool=first_tool):
+                self.spoken.clear()
+                chat = ScriptedChat([call(first_tool)], [call('transcribe_url')], 'Done.')
+                def run_tool(name, arguments):
+                    self.assertEqual(len(self.spoken), 1)  # feedback precedes the blocking work
+                    return '{}'
+                with patch.object(self.a, 'run_tool', side_effect=run_tool):
+                    self.a.ask(chat, '\u6211\u60f3\u542c\u7ea2\u8c46')
+                self.assertIn('\u7a0d\u7b49', self.spoken[0])
+                self.assertNotIn('\u5206\u949f', self.spoken[0])
+
+    def test_model_wait_message_is_preserved_without_fallback_in_both_modes(self):
+        line = "I'll find a lovely piano performance for you; please give me a moment."
+        for voice in (True, False):
+            with self.subTest(voice=voice):
+                self.spoken.clear()
+                self.a.speak = self.spoken.append if voice else None
+                chat = Mock()
+                chat.send_user.return_value = SimpleNamespace(text=line, tool_calls=[call('search_youtube')])
+                chat.send_tool_results.side_effect = [
+                    SimpleNamespace(text='', tool_calls=[call('transcribe_url')]),
+                    SimpleNamespace(text='Done.', tool_calls=[])]
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), patch.object(self.a, 'run_tool', return_value='{}'):
+                    self.a.ask(chat, 'Please play Sunny Day.')
+                self.assertEqual(output.getvalue().count('assistant>'), 1)
+                self.assertEqual(self.spoken, [line] if voice else [])
+
+    def test_model_delay_acknowledgment_prevents_extra_tool_wait_message(self):
+        from concurrent.futures import TimeoutError
+        reply = SimpleNamespace(text='', tool_calls=[call('search_youtube')])
+        future = Mock(); future.result.side_effect = [TimeoutError(), reply]
+        pool = Mock(); pool.submit.return_value = future
+        chat = ScriptedChat('Done.')
+        with patch('piano2midi.chat.ThreadPoolExecutor', return_value=pool), \
+                patch.object(self.a, 'run_tool', return_value='{}'):
+            self.a.ask(chat, 'Please play Sunny Day.')
+        self.assertEqual(self.spoken, ['One moment, let me see.'])
+
 
 if __name__ == '__main__':
     unittest.main()
