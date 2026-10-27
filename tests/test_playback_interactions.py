@@ -5,11 +5,13 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
 import mido
-from piano2midi.chat import Assistant, TOOLS
+from piano2midi import youtube
+from piano2midi.chat import MAX_TOOL_ROUNDS, NEW_CONVERSATION_AFTER_S, Assistant, TOOLS
 from piano2midi.library import Library
 from piano2midi.play import Player
 from piano2midi.playback_commands import match_command
@@ -25,7 +27,7 @@ class ScriptedChat:
     def __init__(self, *steps):
         self.steps = iter(steps)
         self.messages, self.results = [], []
-        self.resets = 0
+        self.resets = self.discards = 0
 
     def next(self):
         step = next(self.steps, 'Done.')
@@ -43,6 +45,9 @@ class ScriptedChat:
     def reset(self):
         self.resets += 1
 
+    def discard_turn(self):
+        self.discards += 1
+
 
 class PlaybackTests(unittest.TestCase):
     def setUp(self):
@@ -52,15 +57,15 @@ class PlaybackTests(unittest.TestCase):
         self.lib = Library(self.root/'library.db')
         self.addCleanup(self.lib.db.close)
         self.records = []
-        for title in ('\u8d1d\u52a0\u5c14\u6e56\u7554', '\u6708\u5149'):
+        for title in ('贝加尔湖畔', '月光'):
             path = self.root/(title+'.mid')
             midi = mido.MidiFile(); track = mido.MidiTrack(); midi.tracks.append(track)
             track.append(mido.Message('note_on', note=60, velocity=64, time=0))
             track.append(mido.Message('note_off', note=60, time=480*240))
             midi.save(path)
             record = self.lib.add(path, title)
-            metadata = ({'composer':'\u674e\u5065', 'aliases':'Li Jian \u8d1d\u52a0\u5c14\u6e56\u7554', 'tags':'piano'} if title == '\u8d1d\u52a0\u5c14\u6e56\u7554'
-                        else {'composer':'Claude Debussy \u5fb7\u5f6a\u897f', 'aliases':'Clair de Lune \u6708\u5149', 'tags':'piano'})
+            metadata = ({'composer':'李健', 'aliases':'Li Jian 贝加尔湖畔', 'tags':'piano'} if title == '贝加尔湖畔'
+                        else {'composer':'Claude Debussy 德彪西', 'aliases':'Clair de Lune 月光', 'tags':'piano'})
             self.lib.update(record['id'], **metadata)
             self.records.append(self.lib.get(record['id']))
         self.a = Assistant(self.lib)
@@ -79,7 +84,7 @@ class PlaybackTests(unittest.TestCase):
         self.addCleanup(self.a.close)
 
     def prime(self, offset=22):
-        self.a.request = '\u64ad\u653e\u8d1d\u52a0\u5c14\u6e56\u7554'
+        self.a.request = '播放贝加尔湖畔'
         self.a.play(self.records[0]['id'])
         self.player._thread.join()
         self.player._sent_to = offset
@@ -101,11 +106,11 @@ class PlaybackTests(unittest.TestCase):
             result = json.loads(self.a.run_tool('play_recording', {'id': record_id}))
             self.assertEqual(result['error'], 'selection_required')
             self.assertEqual(self.a.pending, pending)
-        self.assertEqual(self.player.current[1], '\u8d1d\u52a0\u5c14\u6e56\u7554')
+        self.assertEqual(self.player.current[1], '贝加尔湖畔')
 
     def test_fixture_has_composer_and_aliases_for_realistic_new_song_search(self):
-        results = self.lib.search('\u5fb7\u5f6a\u897f \u6708\u5149 Clair de Lune Debussy piano')
-        moonlight = next(r for r in results if r['title'] == '\u6708\u5149')
+        results = self.lib.search('德彪西 月光 Clair de Lune Debussy piano')
+        moonlight = next(r for r in results if r['title'] == '月光')
         self.assertIn('Debussy', moonlight['composer'])
         self.assertIn('Clair de Lune', moonlight['aliases'])
 
@@ -113,29 +118,62 @@ class PlaybackTests(unittest.TestCase):
         self.prime(); self.connected = False
         self.a.control_playback('resume')
         pending = self.a.pending
-        chat = ScriptedChat([call('control_playback', action='pause')], '\u597d\uff0c\u51c6\u5907\u597d\u518d\u53eb\u6211\u3002')
-        self.a.ask(chat, '\u5148\u522b\u7ee7\u7eed\uff0c\u6211\u8fd8\u6ca1\u8fde\u597d')
+        chat = ScriptedChat([call('control_playback', action='pause')], '好，准备好再叫我。')
+        self.a.ask(chat, '先别继续，我还没连好')
         self.assertEqual(self.player.state, 'paused')
         self.assertEqual(self.player.position, 22)
         self.assertEqual(self.a.pending, pending)
 
-    def test_selected_new_song_requires_actual_search_result(self):
-        chat = ScriptedChat([call('search_library', query='\u6708\u5149')],
+    def test_connection_failure_forgets_only_that_turn(self):
+        self.connected = False
+        chat = ScriptedChat([call('search_library', query='月光')],
                             [call('play_recording', id=self.records[1]['id'])])
-        self.a.ask(chat, '\u6211\u60f3\u542c\u6708\u5149')
-        self.assertEqual(self.player.current[1], '\u6708\u5149')
+        self.a.ask(chat, '我想听月光')
+        self.assertEqual(chat.discards, 1)
+        self.assertEqual(chat.resets, 0, 'Earlier turns stay')
+        self.assertEqual(self.a.pending.title, '月光')
+
+    def test_endless_tool_calls_are_given_up_cleanly(self):
+        chat = ScriptedChat(*[[call('search_library', query='月光')]] * (MAX_TOOL_ROUNDS + 1))
+        self.a.ask(chat, '我想听月光')
+        self.assertEqual(chat.discards, 1, 'No unanswered tool call is left for the next request')
+
+    def test_a_long_quiet_spell_starts_a_new_conversation(self):
+        now = [1000.0]
+        self.a.clock = lambda: now[0]
+        chat = ScriptedChat('好呀。', '在呢。', '欢迎回来。')
+        self.a.ask(chat, '你好')
+        now[0] += 60
+        self.a.ask(chat, '还在吗')
+        self.assertEqual(chat.resets, 0)
+        now[0] += NEW_CONVERSATION_AFTER_S + 1
+        self.a.ask(chat, '我回来了')
+        self.assertEqual(chat.resets, 1)
+
+    def test_tool_failures_are_shown_in_the_terminal(self):
+        with patch('piano2midi.youtube.search', side_effect=youtube.YouTubeError('YouTube API error 403: quota')), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            result = json.loads(self.a.run_tool('search_youtube', {'query': '月光'}))
+        self.assertIn('quota', result['error'])
+        self.assertIn('search_youtube failed: YouTube API error 403: quota', out.getvalue())
+
+    def test_selected_new_song_requires_actual_search_result(self):
+        chat = ScriptedChat([call('search_library', query='月光')],
+                            [call('play_recording', id=self.records[1]['id'])])
+        self.a.ask(chat, '我想听月光')
+        self.assertEqual(self.player.current[1], '月光')
         self.assertIsNone(self.a.pending)
 
     def test_selection_permission_expires_after_request(self):
-        self.a.run_tool('search_library', {'query': '\u6708\u5149'})
+        self.a.run_tool('search_library', {'query': '月光'})
         chat = ScriptedChat([call('play_recording', id=self.records[1]['id'])])
-        self.a.ask(chat, '\u804a\u804a\u97f3\u4e50')
+        self.a.ask(chat, '聊聊音乐')
         self.assertEqual(chat.results[0]['error'], 'selection_required')
         self.assertIsNone(self.player.current)
 
     def test_transcription_can_offer_a_new_recording(self):
         with patch.object(self.a, 'transcribe_local', return_value=self.records[1]):
-            self.a.run_tool('transcribe_local', {'path':'input.wav', 'title':'\u6708\u5149'})
+            self.a.run_tool('transcribe_local', {'path':'input.wav', 'title':'月光'})
         self.assertEqual(self.a.play_recording(self.records[1]['id'])['status'], 'playing')
 
     def test_extra_control_id_is_rejected_without_state_change(self):
@@ -158,7 +196,11 @@ class PlaybackTests(unittest.TestCase):
         import hashlib
         import os
         import piano2midi.network_midi as network
-        with patch('piano2midi.network_midi.sys.platform', 'darwin'),              patch.dict(os.environ, {'PIANO2MIDI_NETWORK_PEER':'Test Device', 'PIANO2MIDI_NETWORK_PORT':'Network RTP Session 1'}),              patch('piano2midi.library.CACHE_DIR', self.root),              patch('piano2midi.network_midi.shutil.which', return_value='/usr/bin/swiftc'):
+        with patch('piano2midi.network_midi.sys.platform', 'darwin'), \
+                patch.dict(os.environ, {'PIANO2MIDI_NETWORK_PEER': 'Test Device',
+                                        'PIANO2MIDI_NETWORK_PORT': 'Network RTP Session 1'}), \
+                patch('piano2midi.library.CACHE_DIR', self.root), \
+                patch('piano2midi.network_midi.shutil.which', return_value='/usr/bin/swiftc'):
             binary = self.root/'network-midi'/('check-'+hashlib.sha256(network._SWIFT.encode()).hexdigest()[:16])
             binary.parent.mkdir(); binary.touch()
             with patch('piano2midi.network_midi.subprocess.run') as run:
@@ -172,28 +214,28 @@ class PlaybackTests(unittest.TestCase):
     def test_model_can_correct_wrong_selection_tool_to_control(self):
         self.prime()
         chat = ScriptedChat([call('play_recording', id=999)], [call('control_playback', action='resume')])
-        answer = self.a.ask(chat, '\u597d\u50cf\u65ad\u5f00\u4e86\uff0c\u4f60\u53ef\u4ee5\u770b\u770b\u80fd\u5e2e\u6211\u7ee7\u7eed\u64ad\u653e\u5417\uff1f')
+        answer = self.a.ask(chat, '好像断开了，你可以看看能帮我继续播放吗？')
         self.player._thread.join()
         self.assertEqual(chat.results[0]['error'], 'selection_required')
         self.assertEqual(self.player._from, 22)
         self.assertEqual(answer, '')
-        self.assertFalse(any('\u627e\u4e0d\u5230' in line or '\u9009\u4e2d' in line for line in self.spoken))
+        self.assertFalse(any('找不到' in line or '选中' in line for line in self.spoken))
 
     def test_model_can_correct_control_parameters(self):
         self.prime()
         chat = ScriptedChat([call('control_playback', action='resume', id=999)],
                             [call('control_playback', action='resume')])
-        self.a.ask(chat, '\u4f60\u80fd\u5e2e\u6211\u63a5\u7740\u5f39\u5417')
+        self.a.ask(chat, '你能帮我接着弹吗')
         self.assertEqual(chat.results[0]['error'], 'invalid_playback_arguments')
         self.assertEqual(self.player._from, 22)
 
     def test_long_request_model_path_matrix(self):
         cases = [
-            ('\u5443\uff0c\u597d\u50cf\u65ad\u5f00\u4e86\uff0c\u4f60\u53ef\u4ee5\u518d\u5e2e\u6211\u91cd\u65b0\u64ad\u653e\u5417\uff1f', 'restart', 0),
-            ('\u5c0f\u660e\u540c\u5b66\u597d\u50cf\u53c8\u65ad\u5f00\u4e86\uff0c\u4f60\u53ef\u4ee5\u770b\u770b\u80fd\u5e2e\u6211\u7ee7\u7eed\u64ad\u653e\u5417\uff1f', 'resume', 22),
-            ('\u6211\u60f3\u7ee7\u7eed\u542c\u8fd9\u9996\u6b4c', 'resume', 22),
-            ('\u6211\u5df2\u7ecf\u8fde\u597d\u4e86\uff0c\u4f60\u5e2e\u6211\u518d\u68c0\u67e5\u518d\u8bd5\u4e00\u6b21\u597d\u5417', 'retry', 22),
-            ('\u521a\u624d\u90a3\u9996\u4ece\u5f00\u5934\u518d\u6765\u4e00\u904d\u5427', 'restart', 0),
+            ('呃，好像断开了，你可以再帮我重新播放吗？', 'restart', 0),
+            ('小明同学好像又断开了，你可以看看能帮我继续播放吗？', 'resume', 22),
+            ('我想继续听这首歌', 'resume', 22),
+            ('我已经连好了，你帮我再检查再试一次好吗', 'retry', 22),
+            ('刚才那首从开头再来一遍吧', 'restart', 0),
             ('Could you carry on with the piece we were hearing?', 'resume', 22),
         ]
         for text, action, offset in cases:
@@ -203,17 +245,17 @@ class PlaybackTests(unittest.TestCase):
                 self.a.ask(chat, text)
                 self.player._thread.join()
                 self.assertEqual(self.player._from, offset)
-                self.assertEqual(self.player.current[1], '\u8d1d\u52a0\u5c14\u6e56\u7554')
+                self.assertEqual(self.player.current[1], '贝加尔湖畔')
 
     def test_midpiece_disconnect_then_repeated_retry_preserves_position(self):
         self.prime(); self.connected = False
-        for text in ('\u597d\u50cf\u505c\u4e86\uff0c\u80fd\u518d\u5e2e\u6211\u8bd5\u4e00\u6b21\u5417', '\u6211\u5df2\u7ecf\u8fde\u63a5\u597d\u4e86'):
+        for text in ('好像停了，能再帮我试一次吗', '我已经连接好了'):
             chat = ScriptedChat([call('control_playback', action='retry')])
             result = self.a.ask(chat, text)
-            self.assertIn('\u8bbe\u5907\u548c\u94a2\u7434', result)
+            self.assertIn('设备和钢琴', result)
             self.assertEqual(self.a.pending.from_s, 22)
         self.connected = True
-        self.a.ask(ScriptedChat([call('control_playback', action='retry')]), '\u73b0\u5728\u597d\u4e86\uff0c\u5e2e\u6211\u7ee7\u7eed')
+        self.a.ask(ScriptedChat([call('control_playback', action='retry')]), '现在好了，帮我继续')
         self.assertEqual(self.player._from, 22)
         self.assertIsNone(self.a.pending)
 
@@ -227,12 +269,12 @@ class PlaybackTests(unittest.TestCase):
 
     def test_failed_new_selection_preserves_old_current_until_retry(self):
         self.prime(); self.connected = False
-        self.a.run_tool('search_library', {'query':'\u6708\u5149'})
+        self.a.run_tool('search_library', {'query':'月光'})
         self.a.play_recording(self.records[1]['id'])
-        self.assertEqual(self.player.current[1], '\u8d1d\u52a0\u5c14\u6e56\u7554')
-        self.assertEqual(self.a.pending.title, '\u6708\u5149')
+        self.assertEqual(self.player.current[1], '贝加尔湖畔')
+        self.assertEqual(self.a.pending.title, '月光')
         self.connected = True; self.a.control_playback('retry')
-        self.assertEqual(self.player.current[1], '\u6708\u5149')
+        self.assertEqual(self.player.current[1], '月光')
 
     def test_cancel_clears_pending_and_stops(self):
         self.prime(); self.connected = False; self.a.control_playback('resume')
@@ -243,9 +285,9 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(self.player._from, 0)
 
     def test_no_current_control_requests_selection_without_claiming_missing_file(self):
-        result = self.a.ask(ScriptedChat([call('control_playback', action='resume')]), '\u80fd\u7ee7\u7eed\u5417')
-        self.assertIn('\u66f2\u540d', result)
-        self.assertNotIn('\u6587\u4ef6', result)
+        result = self.a.ask(ScriptedChat([call('control_playback', action='resume')]), '能继续吗')
+        self.assertIn('曲名', result)
+        self.assertNotIn('文件', result)
 
     def test_only_actual_file_loss_reports_unavailable(self):
         self.prime(); self.player.current[0].unlink()
@@ -253,27 +295,27 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(result['error'], 'recording_unavailable')
 
     def test_current_state_is_supplied_to_model(self):
-        self.prime(); chat = ScriptedChat('\u8fd9\u9996\u5f88\u52a8\u542c\u3002')
-        self.a.ask(chat, '\u8fd9\u9996\u53eb\u4ec0\u4e48')
-        self.assertIn('\u8d1d\u52a0\u5c14\u6e56\u7554', chat.messages[0])
+        self.prime(); chat = ScriptedChat('这首很动听。')
+        self.a.ask(chat, '这首叫什么')
+        self.assertIn('贝加尔湖畔', chat.messages[0])
         self.assertIn('22', chat.messages[0])
         self.assertIn('paused', chat.messages[0])
 
     def test_negations_and_new_song_titles_remain_model_requests(self):
-        for text in ('\u4e0d\u8981\u7ee7\u7eed\u64ad\u653e', '\u6211\u60f3\u7ee7\u7eed\u542c\u6708\u5149', '\u4f60\u80fd\u770b\u770b\u80fd\u5e2e\u6211\u7ee7\u7eed\u5417'):
+        for text in ('不要继续播放', '我想继续听月光', '你能看看能帮我继续吗'):
             self.assertIsNone(match_command(text))
         self.prime()
-        self.a.ask(ScriptedChat('\u597d\uff0c\u5148\u4e0d\u7ee7\u7eed\u3002'), '\u5148\u522b\u7ee7\u7eed\uff0c\u542c\u6211\u8bf4')
+        self.a.ask(ScriptedChat('好，先不继续。'), '先别继续，听我说')
         self.assertEqual(self.player.state, 'paused')
 
     def test_quick_controls_share_the_same_dispatch(self):
         self.prime()
-        self.a.ask(ScriptedChat(), '\u7ee7\u7eed\u64ad\u653e')
+        self.a.ask(ScriptedChat(), '继续播放')
         self.player._thread.join()
         self.player._sent_to = 30
-        self.a.ask(ScriptedChat(), '\u505c\u6b62\u64ad\u653e')
+        self.a.ask(ScriptedChat(), '停止播放')
         self.assertEqual(self.player.position, 30)
-        self.a.ask(ScriptedChat(), '\u4ece\u5934\u5f39')
+        self.a.ask(ScriptedChat(), '从头弹')
         self.assertEqual(self.player._from, 0)
 
     def test_finish_is_delayed_and_consumed_once(self):
@@ -287,11 +329,11 @@ class PlaybackTests(unittest.TestCase):
     def test_auto_resume_failure_replaces_final_reply_with_one_fault(self):
         self.prime(); self.connected = False
         self.a.touched_playback = False
-        self.a.request = '\u73b0\u5728\u597d\u50cf\u65ad\u5f00\u4e86\uff0c\u4f60\u5e2e\u6211\u770b\u4e00\u4e0b'
+        self.a.request = '现在好像断开了，你帮我看一下'
         speaker = Mock()
-        finish_interaction(self.a, speaker, '\u505c\u572822\u79d2\uff0c\u7b49\u8fde\u63a5\u597d\u4e86\u7ee7\u7eed\u3002', True)
+        finish_interaction(self.a, speaker, '停在22秒，等连接好了继续。', True)
         speaker.say.assert_called_once()
-        self.assertIn('\u8bbe\u5907\u548c\u94a2\u7434', speaker.say.call_args.args[0])
+        self.assertIn('设备和钢琴', speaker.say.call_args.args[0])
         self.assertEqual(self.player.state, 'paused')
         self.assertEqual(self.player.position, 22)
 
@@ -300,24 +342,24 @@ class PlaybackTests(unittest.TestCase):
         events = []
         speaker = Mock(); speaker.say.side_effect = lambda text: events.append(('reply', text))
         with patch.object(self.player, 'check_connection', side_effect=lambda: events.append('check')),              patch.object(self.player, 'play', side_effect=lambda *args: events.append('play')):
-            finish_interaction(self.a, speaker, '\u662f\u8d1d\u52a0\u5c14\u6e56\u7554\u3002', True)
+            finish_interaction(self.a, speaker, '是贝加尔湖畔。', True)
             self.player._thread.join()
-        self.assertEqual(events, ['check', ('reply','\u662f\u8d1d\u52a0\u5c14\u6e56\u7554\u3002'), 'play'])
+        self.assertEqual(events, ['check', ('reply','是贝加尔湖畔。'), 'play'])
         self.assertEqual(self.player._from, 22)
 
     def test_explicit_pause_does_not_auto_resume(self):
         self.prime(); self.a.touched_playback = True
         speaker = Mock()
         with patch.object(self.player, 'start') as start:
-            finish_interaction(self.a, speaker, '\u597d\uff0c\u5148\u6682\u505c\u3002', True)
+            finish_interaction(self.a, speaker, '好，先暂停。', True)
             start.assert_not_called()
-        speaker.say.assert_called_once_with('\u597d\uff0c\u5148\u6682\u505c\u3002')
+        speaker.say.assert_called_once_with('好，先暂停。')
 
     def test_short_pause_has_one_spoken_confirmation_and_keeps_position(self):
         self.prime()
-        answer = self.a.ask(ScriptedChat(), "\u505c\u6b62\u64ad\u653e")
+        answer = self.a.ask(ScriptedChat(), "停止播放")
         self.assertTrue(answer)
-        self.assertNotIn("\u64ad\u653e", answer)
+        self.assertNotIn("播放", answer)
         speaker = Mock()
         finish_interaction(self.a, speaker, answer, True)
         speaker.say.assert_called_once_with(answer)
@@ -326,25 +368,25 @@ class PlaybackTests(unittest.TestCase):
 
     def test_resume_and_restart_introductions_are_spoken_once(self):
         self.prime()
-        self.a.ask(ScriptedChat(), "\u7ee7\u7eed\u64ad\u653e")
+        self.a.ask(ScriptedChat(), "继续播放")
         self.player._thread.join()
         self.assertEqual(len(self.spoken), 1)
-        self.assertIn("\u5f39", self.spoken[0])
+        self.assertIn("弹", self.spoken[0])
         self.assertEqual(self.player._from, 22)
         self.a.pause(); self.spoken.clear()
-        answer = self.a.ask(ScriptedChat(), "\u4ece\u5934\u5f39")
+        answer = self.a.ask(ScriptedChat(), "从头弹")
         self.player._thread.join()
         self.assertEqual(answer, '')
         self.assertEqual(len(self.spoken), 1)
-        self.assertTrue("\u4ece\u5934" in self.spoken[0] or "\u5f00\u59cb" in self.spoken[0])
+        self.assertTrue("从头" in self.spoken[0] or "开始" in self.spoken[0])
         self.assertEqual(self.player._from, 0)
 
     def test_model_pause_uses_one_fallback_only_if_final_reply_is_empty(self):
-        for final_reply in ('', "\u597d\u5440\uff0c\u6211\u5148\u505c\u4e00\u4e0b\u3002"):
+        for final_reply in ('', "好呀，我先停一下。"):
             with self.subTest(final_reply=final_reply):
                 self.prime()
                 chat = ScriptedChat([call('control_playback', action='pause')], final_reply)
-                answer = self.a.ask(chat, "\u80fd\u5148\u6682\u505c\u4e00\u4e0b\u8fd9\u9996\u5417")
+                answer = self.a.ask(chat, "能先暂停一下这首吗")
                 self.assertTrue(answer)
                 if final_reply: self.assertEqual(answer, final_reply)
                 self.assertEqual(self.spoken, [])
@@ -354,48 +396,68 @@ class PlaybackTests(unittest.TestCase):
 
     def test_failed_restart_does_not_speak_a_success_confirmation(self):
         self.prime(); self.connected = False
-        answer = self.a.ask(ScriptedChat(), "\u4ece\u5934\u5f39")
-        self.assertIn("\u8bbe\u5907\u548c\u94a2\u7434", answer)
+        answer = self.a.ask(ScriptedChat(), "从头弹")
+        self.assertIn("设备和钢琴", answer)
         self.assertEqual(self.spoken, [])
         self.assertEqual(self.a.pending.from_s, 0)
         self.assertEqual(self.player.state, 'paused')
 
     def test_name_only_request_is_local_and_preserves_playback(self):
         self.prime()
-        for text in ("\u5c0f\u8317\u540c\u5b66", "\u5c0f\u660e\u540c\u5b66", "Hey Jasmine"):
+        for text in ("小茗同学", "小明同学", "Hey Jasmine"):
             with self.subTest(text=text):
                 chat = Mock()
                 answer = self.a.ask(chat, text)
                 self.assertTrue(answer)
-                self.assertNotIn("\u770b\u770b", answer)
+                self.assertNotIn("看看", answer)
                 chat.send_user.assert_not_called()
                 self.assertEqual(self.player.state, 'paused')
                 self.assertEqual(self.player.position, 22)
 
-    def test_repeated_name_after_greeting_is_not_sent_to_chat(self):
+    def test_mac_voice_runs_the_shared_conversation_on_its_own_microphone(self):
         import numpy as np
         import piano2midi.voice as voice
         mic = Mock(); mic.read.side_effect = [np.zeros(voice.FRAME, dtype=np.int16), KeyboardInterrupt()]
-        wake = Mock(words=["\u5c0f\u8317\u540c\u5b66"]); wake.heard.return_value = "\u5c0f\u8317\u540c\u5b66"
-        speech = Mock(return_value=False)
-        greeter = Mock(return_value="\u6211\u5728\u5462")
+        parts = Mock(); parts.wake.heard.return_value = None; parts.wake.words = ['小茗同学']
+        parts.speech.return_value = False
         assistant = Mock(player=None)
-        with patch('piano2midi.library.Library'),              patch('piano2midi.chat.index_midi_folder'),              patch('piano2midi.chat.Assistant', return_value=assistant),              patch('piano2midi.llm.make_chat', return_value=(Mock(), 'test')),              patch.multiple(voice, Speaker=Mock(), Transcriber=Mock(return_value=Mock(return_value="\u5c0f\u8317\u540c\u5b66")),
-                            WakeWord=Mock(return_value=wake), Speech=Mock(return_value=speech),
-                            Microphone=Mock(return_value=mic), Greeter=Mock(return_value=greeter),
-                            record=Mock(return_value=np.zeros(voice.FRAME))):
+        with patch('piano2midi.library.Library'), patch('piano2midi.chat.index_midi_folder'), \
+                patch('piano2midi.chat.Assistant', return_value=assistant), \
+                patch.object(voice, 'voice_chat', return_value=(Mock(), 'test')), \
+                patch.multiple(voice, VoiceParts=Mock(return_value=parts), Microphone=Mock(return_value=mic)):
             self.assertEqual(voice.main([]), 0)
-        greeter.assert_called_once()
-        assistant.ask.assert_not_called()
+        parts.speech.assert_called_once()  # the frame reached the conversation
+        assistant.stop.assert_called_once()
+        assistant.close.assert_called_once()
 
     def test_wait_message_only_once_during_model_delay(self):
         from concurrent.futures import TimeoutError
-        reply = SimpleNamespace(text='\u60f3\u542c\u54ea\u9996\uff1f', tool_calls=[])
+        reply = SimpleNamespace(text='想听哪首？', tool_calls=[])
         future = Mock(); future.result.side_effect=[TimeoutError(), reply]
         pool = Mock(); pool.submit.return_value=future
-        with patch('piano2midi.chat.ThreadPoolExecutor', return_value=pool):
-            self.a.ask(Mock(), '\u60f3\u542c\u6b4c')
-        self.assertEqual(self.spoken, ['\u597d\u5440\uff0c\u6211\u770b\u770b\u3002'])
+        with patch('piano2midi.chat.Worker', return_value=pool):
+            self.a.ask(Mock(), '想听歌')
+        self.assertEqual(self.spoken, ['好呀，我看看。'])
+
+    def test_wait_message_counts_all_model_steps_together(self):
+        from concurrent.futures import TimeoutError
+        now, timeouts = [100.0], []
+        steps = iter([SimpleNamespace(text='', tool_calls=[call('search_library', query='月光')]),
+                      TimeoutError(), SimpleNamespace(text='找到啦。', tool_calls=[])])
+        def result(timeout=None):
+            timeouts.append(timeout)
+            now[0] += 2  # each step takes two seconds: neither alone reaches three
+            step = next(steps)
+            if isinstance(step, Exception):
+                raise step
+            return step
+        future = Mock(); future.result.side_effect = result
+        pool = Mock(); pool.submit.return_value = future
+        with patch('piano2midi.chat.Worker', return_value=pool), \
+                patch('piano2midi.chat.time.monotonic', side_effect=lambda: now[0]):
+            self.a.ask(Mock(), '想听月光')
+        self.assertEqual(timeouts[:2], [3.0, 1.0])
+        self.assertEqual(self.spoken, ['好呀，我看看。'])
 
     def test_silent_model_announces_before_long_tools_only_once(self):
         for first_tool in ('search_youtube', 'transcribe_url', 'transcribe_local'):
@@ -406,9 +468,9 @@ class PlaybackTests(unittest.TestCase):
                     self.assertEqual(len(self.spoken), 1)  # feedback precedes the blocking work
                     return '{}'
                 with patch.object(self.a, 'run_tool', side_effect=run_tool):
-                    self.a.ask(chat, '\u6211\u60f3\u542c\u7ea2\u8c46')
-                self.assertIn('\u7a0d\u7b49', self.spoken[0])
-                self.assertNotIn('\u5206\u949f', self.spoken[0])
+                    self.a.ask(chat, '我想听红豆')
+                self.assertIn('稍等', self.spoken[0])
+                self.assertNotIn('分钟', self.spoken[0])
 
     def test_model_wait_message_is_preserved_without_fallback_in_both_modes(self):
         line = "I'll find a lovely piano performance for you; please give me a moment."
@@ -433,11 +495,33 @@ class PlaybackTests(unittest.TestCase):
         future = Mock(); future.result.side_effect = [TimeoutError(), reply]
         pool = Mock(); pool.submit.return_value = future
         chat = ScriptedChat('Done.')
-        with patch('piano2midi.chat.ThreadPoolExecutor', return_value=pool), \
+        with patch('piano2midi.chat.Worker', return_value=pool), \
                 patch.object(self.a, 'run_tool', return_value='{}'):
             self.a.ask(chat, 'Please play Sunny Day.')
         self.assertEqual(self.spoken, ['One moment, let me see.'])
 
+
+
+class WorkerTests(unittest.TestCase):
+    def test_calls_run_in_order_in_one_thread_that_never_holds_up_quitting(self):
+        from piano2midi.chat import Worker
+        worker, seen = Worker(), []
+        def job(n):
+            seen.append((n, threading.current_thread()))
+            if n == 2:
+                raise ValueError('bad')
+            return n
+        futures = [worker.submit(job, n) for n in range(4)]
+        self.assertEqual(futures[0].result(2), 0)
+        with self.assertRaises(ValueError):
+            futures[2].result(2)
+        self.assertEqual(futures[3].result(2), 3)
+        self.assertEqual([n for n, _ in seen], [0, 1, 2, 3])
+        self.assertEqual(len({thread for _, thread in seen}), 1)
+        self.assertTrue(seen[0][1].daemon)
+        worker.shutdown()
+        seen[0][1].join(2)
+        self.assertFalse(seen[0][1].is_alive())
 
 if __name__ == '__main__':
     unittest.main()

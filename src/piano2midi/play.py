@@ -179,10 +179,6 @@ class Player:
             return max(self._from, time.perf_counter() - self._t0)
         return self._offset
 
-    @property
-    def now_playing(self) -> str | None:
-        return self.current[1] if self.current and self.state == "playing" else None
-
     def play(self, items: list[tuple[Path, str]], from_s: float = 0.0, on_start=None) -> None:
         """Play (path, title) items in order, the first from from_s; returns when everything is sent, or paused
         or stopped. With a lead, the music goes on for that long after this returns."""
@@ -214,6 +210,9 @@ class Player:
         self._halt()
         if on_ready:
             on_ready()
+        self._launch(items, from_s)
+
+    def _launch(self, items: list[tuple[Path, str]], from_s: float) -> None:
         self._stop.clear()  # here, not in the thread, so an immediate pause() cannot be lost
         self.current, self.state, self._offset = items[0], "playing", from_s
         self._t0, self._from, self._sent_to = time.perf_counter() + self.lead - from_s, from_s, from_s

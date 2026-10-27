@@ -66,14 +66,14 @@ def check_network_midi(port_name: str) -> bool:
         if not binary.is_file():
             compiler = shutil.which("swiftc")
             if not compiler:
-                print("\u8fde\u63a5\u68c0\u67e5\u6682\u4e0d\u53ef\u7528\uff1b\u5c06\u5c1d\u8bd5\u4f7f\u7528\u5df2\u9009 MIDI \u8f93\u51fa\u3002", flush=True)
+                print("连接检查暂不可用；将尝试使用已选 MIDI 输出。", flush=True)
                 return True
             source = cache / ("check-" + tag + ".swift")
             source.write_text(_SWIFT)
             part = binary.with_suffix(".part")
             result = subprocess.run([compiler, str(source), "-o", str(part)], capture_output=True, text=True, timeout=60)
             if result.returncode:
-                print("\u8fde\u63a5\u68c0\u67e5\u6682\u4e0d\u53ef\u7528\uff1b\u5c06\u5c1d\u8bd5\u4f7f\u7528\u5df2\u9009 MIDI \u8f93\u51fa\u3002", flush=True)
+                print("连接检查暂不可用；将尝试使用已选 MIDI 输出。", flush=True)
                 return True
             part.replace(binary)
         result = subprocess.run([str(binary.resolve()), target, port_name], capture_output=True, text=True, timeout=10)
@@ -81,11 +81,11 @@ def check_network_midi(port_name: str) -> bool:
         if result.returncode == 0 and status == "READY":
             return True
         if result.returncode != 0 and status == "MISSING":
-            print("\u8bbe\u5907\u5c1a\u672a\u8fde\u63a5\uff0c\u8bf7\u68c0\u67e5 MIDI \u7f51\u7edc\u8bbe\u7f6e\u3002", flush=True)
+            print("设备尚未连接，请检查 MIDI 网络设置。", flush=True)
             return False
         # An unsupported inspection API is not evidence of a disconnected device.
-        print("\u65e0\u6cd5\u786e\u8ba4\u7f51\u7edc\u4f1a\u8bdd\u72b6\u6001\uff1b\u5c06\u5c1d\u8bd5\u4f7f\u7528\u5df2\u9009 MIDI \u8f93\u51fa\u3002", flush=True)
+        print("无法确认网络会话状态；将尝试使用已选 MIDI 输出。", flush=True)
         return True
     except (OSError, subprocess.TimeoutExpired):
-        print("\u8fde\u63a5\u68c0\u67e5\u6682\u4e0d\u53ef\u7528\uff1b\u5c06\u5c1d\u8bd5\u4f7f\u7528\u5df2\u9009 MIDI \u8f93\u51fa\u3002", flush=True)
+        print("连接检查暂不可用；将尝试使用已选 MIDI 输出。", flush=True)
         return True

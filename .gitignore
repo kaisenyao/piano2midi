@@ -16,6 +16,10 @@ output/*
 *.aiff
 *.mid
 
+# The two selected UI cues are application assets, not user recordings.
+!/src/piano2midi/web/cue-active.mp3
+!/src/piano2midi/web/cue-paused.mp3
+
 # Demo MIDI is part of the repository
 !demo/
 !demo/*.mid

@@ -6,6 +6,7 @@
 # ./run.sh library list        -> show the local MIDI library
 # ./run.sh play some words     -> play a library piece on Pianoteq over MIDI
 # ./run.sh voice               -> say "Hey Jasmine", then ask for a piece
+# ./run.sh web-voice           -> the same, with your iPhone as microphone and speaker
 set -euo pipefail
 cd "$(dirname "$0")"
 if [ ! -x .venv/bin/piano2midi ]; then echo "Run ./setup.sh first."; exit 1; fi
@@ -13,6 +14,7 @@ case "${1:-}" in
   chat) shift; exec .venv/bin/python -m piano2midi.chat "$@" ;;
   library) shift; exec .venv/bin/python -m piano2midi.library "$@" ;;
   play) shift; exec .venv/bin/python -m piano2midi.play "$@" ;;
+  web-voice) shift; exec .venv/bin/python -m piano2midi.web_voice "$@" ;;
   voice) shift; exec .venv/bin/python -m piano2midi.voice "$@" ;;
 esac
 if [ $# -eq 0 ]; then

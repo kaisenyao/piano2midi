@@ -3,23 +3,23 @@ import os
 import re
 import unicodedata
 
-WAKE_WORDS = [w.strip() for w in os.environ.get("PIANO2MIDI_WAKE_WORDS", "\u5c0f\u8317\u540c\u5b66,Hey Jasmine").split(",") if w.strip()]
+WAKE_WORDS = [w.strip() for w in os.environ.get("PIANO2MIDI_WAKE_WORDS", "小茗同学,Hey Jasmine").split(",") if w.strip()]
 
-# Short commands handled without the model. Chinese phrases are written as escapes because the repository is
-# English-only; the pinyin is in the comments.
-COMMANDS = {  # simplified and traditional forms
+# Short commands handled without the model, in English and in simplified and traditional Chinese.
+COMMANDS = {
     "pause": {"stop", "pause", "stop playing", "stop it", "stop the music", "enough", "that's enough",
-              "\u505c", "\u505c\u4e00\u4e0b", "\u6682\u505c", "\u66ab\u505c", "\u505c\u6b62", "\u505c\u6b62\u64ad\u653e", "\u6682\u505c\u64ad\u653e", "\u66ab\u505c\u64ad\u653e", "\u591f\u4e86", "\u5920\u4e86", "\u522b\u5f39\u4e86", "\u5225\u5f48\u4e86", "\u5148\u505c\u4e00\u4e0b"},
-    # ting, ting yixia, zanting, tingzhi, tingzhi bofang, zanting bofang, gou le, bie tan le, xian ting yixia
+              "停", "停一下", "暂停", "暫停", "停止", "停止播放", "暂停播放", "暫停播放", "够了", "夠了", "别弹了", "別彈了", "先停一下"},
     "resume": {"play", "continue", "keep playing", "resume", "go on", "start playing", "continue playing",
-               "\u64ad\u653e", "\u5f00\u59cb\u64ad\u653e", "\u958b\u59cb\u64ad\u653e", "\u7ee7\u7eed", "\u7e7c\u7e8c", "\u7ee7\u7eed\u5f39", "\u7e7c\u7e8c\u5f48", "\u7ee7\u7eed\u64ad\u653e", "\u7e7c\u7e8c\u64ad\u653e", "\u63a5\u7740\u5f39", "\u63a5\u8457\u5f48", "\u63a5\u7740\u64ad\u653e", "\u63a5\u8457\u64ad\u653e"},
-    # bofang, kaishi bofang, jixu, jixu tan, jixu bofang, jiezhe tan, jiezhe bofang
-    "retry": {"retry", "try again", "\u91cd\u8bd5", "\u518d\u8bd5\u4e00\u6b21"},
-    "cancel": {"cancel", "\u53d6\u6d88", "\u53d6\u6d88\u64ad\u653e"},
+               "播放", "开始播放", "開始播放", "继续", "繼續", "继续弹", "繼續彈", "继续播放", "繼續播放", "接着弹", "接著彈", "接着播放", "接著播放"},
+    "retry": {"retry", "try again", "重试", "再试一次"},
+    "cancel": {"cancel", "取消", "取消播放"},
     "restart": {"start over", "from the beginning", "play it again", "play it from the beginning",
-                "\u4ece\u5934\u5f39", "\u5f9e\u982d\u5f48", "\u4ece\u5934\u5f00\u59cb", "\u5f9e\u982d\u958b\u59cb", "\u4ece\u5934\u64ad\u653e", "\u5f9e\u982d\u64ad\u653e", "\u91cd\u65b0\u5f39", "\u91cd\u65b0\u5f48"},
-    # congtou tan, congtou kaishi, congtou bofang, chongxin tan
+                "从头弹", "從頭彈", "从头开始", "從頭開始", "从头播放", "從頭播放", "重新弹", "重新彈"},
 }
+
+
+def is_chinese(text: str) -> bool:
+    return re.search(r"[\u3400-\u9fff]", text) is not None
 
 
 def assistant_names(words: list[str]) -> list[str]:
@@ -28,10 +28,9 @@ def assistant_names(words: list[str]) -> list[str]:
 
 
 FILLERS_START = (*dict.fromkeys(w.casefold() for w in WAKE_WORDS + assistant_names(WAKE_WORDS)),
-                 "hey", "\u563f", "please", "okay", "ok", "uh", "um", "so",
-                 "\u8bf7", "\u5443", "\u55ef", "\u90a3\u4e2a", "\u90a3", "\u597d\u7684", "\u597d", "\u54e6", "\u554a")
-# qing, e, en, nage, na, hao de, hao, o, a
-FILLERS_END = ("please", "\u5427", "\u554a", "\u5440", "\u54e6", "\u5443", "\u55ef")  # ba, a, ya, o, e, en
+                 "hey", "嘿", "please", "okay", "ok", "uh", "um", "so",
+                 "请", "呃", "嗯", "那个", "那", "好的", "好", "哦", "啊")
+FILLERS_END = ("please", "吧", "啊", "呀", "哦", "呃", "嗯")
 
 
 def drop_chinese_name(t: str) -> str | None:

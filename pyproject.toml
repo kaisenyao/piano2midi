@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-api = ["fastapi", "uvicorn", "python-multipart"]
+web-voice = ["fastapi", "uvicorn[standard]", "sherpa-onnx", "pypinyin"]
 voice = ["sounddevice", "sherpa-onnx", "pypinyin"]
 
 [project.scripts]
@@ -32,6 +32,10 @@ piano2midi-chat = "piano2midi.chat:main"
 piano2midi-library = "piano2midi.library:main"
 piano2midi-play = "piano2midi.play:main"
 piano2midi-voice = "piano2midi.voice:main"
+piano2midi-web-voice = "piano2midi.web_voice:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+piano2midi = ["web/*"]

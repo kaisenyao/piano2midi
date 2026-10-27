@@ -58,7 +58,7 @@ class OpenAIChat:
         self.client, self.model, self.instructions = OpenAI(), model, instructions
         self.tools = [{"type": "function", "name": t["name"], "description": t["description"],
                        "parameters": t["parameters"]} for t in tools]
-        self.previous = None
+        self.previous = self.turn_start = None
 
     def _call(self, items: list) -> Reply:
         kwargs = {"previous_response_id": self.previous} if self.previous else {}
@@ -70,13 +70,18 @@ class OpenAIChat:
         return Reply(resp.output_text or "", calls)
 
     def send_user(self, text: str) -> Reply:
+        self.turn_start = self.previous
         return self._call([{"role": "user", "content": text}])
 
     def send_tool_results(self, results: list[tuple[ToolCall, str]]) -> Reply:
         return self._call([{"type": "function_call_output", "call_id": c.id, "output": out} for c, out in results])
 
+    def discard_turn(self) -> None:
+        """Forget the latest request and what followed it; the conversation before it stays."""
+        self.previous = self.turn_start
+
     def reset(self) -> None:
-        self.previous = None
+        self.previous = self.turn_start = None
 
 
 class AnthropicChat:
@@ -87,6 +92,7 @@ class AnthropicChat:
         self.tools = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
                       for t in tools]
         self.messages: list[dict] = []
+        self.turn_start = 0
 
     def _call(self) -> Reply:
         resp = self.client.messages.create(model=self.model, max_tokens=2000, system=self.instructions,
@@ -97,6 +103,7 @@ class AnthropicChat:
         return Reply(text, calls)
 
     def send_user(self, text: str) -> Reply:
+        self.turn_start = len(self.messages)
         self.messages.append({"role": "user", "content": text})
         return self._call()
 
@@ -105,8 +112,13 @@ class AnthropicChat:
             {"type": "tool_result", "tool_use_id": c.id, "content": out} for c, out in results]})
         return self._call()
 
+    def discard_turn(self) -> None:
+        """Forget the latest request and what followed it; the conversation before it stays."""
+        del self.messages[self.turn_start:]
+
     def reset(self) -> None:
         self.messages = []
+        self.turn_start = 0
 
 
 def make_chat(instructions: str, tools: list[dict]):

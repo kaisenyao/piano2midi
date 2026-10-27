@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".aif", ".aiff"}
+MAX_AUDIO_S = 60 * 60  # a single piano piece; anything longer is a compilation, and would fill the memory
 
 
 def ffmpeg_exe() -> str:
@@ -25,9 +26,9 @@ def ffmpeg_exe() -> str:
 
 def load_audio(path: str | Path, sample_rate: int, channels: int = 2) -> np.ndarray:
     """Return audio as float32 array shaped (samples, channels) at `sample_rate`."""
-    cmd = [
+    cmd = [  # decoding stops just past the limit, so a long file is refused without being read whole
         ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
-        "-i", str(path), "-vn", "-ac", str(channels), "-ar", str(sample_rate),
+        "-i", str(path), "-vn", "-ac", str(channels), "-ar", str(sample_rate), "-t", str(MAX_AUDIO_S + 1),
         "-f", "f32le", "-",
     ]
     proc = subprocess.run(cmd, capture_output=True)
@@ -36,6 +37,8 @@ def load_audio(path: str | Path, sample_rate: int, channels: int = 2) -> np.ndar
     audio = np.frombuffer(proc.stdout, dtype=np.float32)
     if audio.size == 0:
         raise RuntimeError("decoded audio is empty")
+    if audio.size > MAX_AUDIO_S * sample_rate * channels:
+        raise RuntimeError(f"the recording is longer than {MAX_AUDIO_S // 60} minutes")
     return audio.reshape(-1, channels).copy()
 
 

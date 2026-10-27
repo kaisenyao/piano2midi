@@ -9,6 +9,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .audio import MAX_AUDIO_S
+
 API = "https://www.googleapis.com/youtube/v3"
 
 # Hints for the chat model; a hit is a warning sign, not an automatic rejection.
@@ -94,6 +96,8 @@ def search(query: str, max_results: int = 8, key: str | None = None) -> list[dic
             continue
         sn, cd, st = v.get("snippet", {}), v.get("contentDetails", {}), v.get("statistics", {})
         seconds = parse_duration(cd.get("duration", ""))
+        if seconds > MAX_AUDIO_S:  # too long to transcribe, so never offered
+            continue
         description = (sn.get("description") or "").strip()
         results.append({
             "url": f"https://www.youtube.com/watch?v={vid}",

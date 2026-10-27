@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import tempfile
@@ -13,7 +12,7 @@ from pathlib import Path
 import pretty_midi
 
 from .audio import load_audio
-from .cleanup import clean
+from .cleanup import SUSTAIN, clean, pedal_intervals
 
 EXTRAS_DIR = "extras"
 
@@ -28,12 +27,7 @@ class Options:
 def summarize(midi: pretty_midi.PrettyMIDI) -> dict:
     notes = [n for i in midi.instruments for n in i.notes]
     ccs = [c for i in midi.instruments for c in i.control_changes]
-    sustain = sorted((c for c in ccs if c.number == 64), key=lambda c: c.time)
-    presses, down = 0, False
-    for c in sustain:
-        if c.value >= 64 and not down:
-            presses += 1
-        down = c.value >= 64
+    sustain = sorted((c for c in ccs if c.number == SUSTAIN), key=lambda c: c.time)
     vel = [n.velocity for n in notes]
     return {
         "notes": len(notes),
@@ -41,7 +35,7 @@ def summarize(midi: pretty_midi.PrettyMIDI) -> dict:
         "velocity_max": max(vel) if vel else None,
         "distinct_velocities": len(set(vel)),
         "pitch_range": [min(n.pitch for n in notes), max(n.pitch for n in notes)] if notes else None,
-        "sustain_pedal_presses": presses,
+        "sustain_pedal_presses": len(pedal_intervals(ccs)),
         "sustain_pedal_released_at_end": (not sustain) or sustain[-1].value < 64,
         "soft_pedal_events": sum(1 for c in ccs if c.number == 67),
         "end_time_s": round(midi.get_end_time(), 3),
@@ -107,9 +101,3 @@ def convert_file(engine, audio_path, out_dir, options: Options, overwrite: bool 
         os.replace(stage / "info.json", info_path)
         os.replace(stage / "final.mid", midi_path)
     return info
-
-
-def midi_bytes(midi: pretty_midi.PrettyMIDI) -> bytes:
-    buf = io.BytesIO()
-    midi.write(buf)
-    return buf.getvalue()

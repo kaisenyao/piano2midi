@@ -41,7 +41,7 @@ class CleanupReport:
         }
 
 
-def _pedal_intervals(ccs: list[pretty_midi.ControlChange]) -> list[tuple[float, float]]:
+def pedal_intervals(ccs: list[pretty_midi.ControlChange]) -> list[tuple[float, float]]:
     """(down, up) intervals of the sustain pedal, from CC64 events."""
     intervals, down = [], None
     for c in sorted((c for c in ccs if c.number == SUSTAIN), key=lambda c: c.time):
@@ -85,7 +85,7 @@ def close_melody_gaps(notes, ccs, report: CleanupReport) -> None:
     Off by default: it assumes legato intent. On detached playing (e.g. Glenn Gould's
     Bach, almost no pedal) it changed ~18% of the notes and would erase the articulation.
     """
-    intervals = _pedal_intervals(ccs)
+    intervals = pedal_intervals(ccs)
     starts = [a for a, _ in intervals]
     ordered = sorted(notes, key=lambda n: (n.start, -n.pitch))
     clusters: list[list] = []

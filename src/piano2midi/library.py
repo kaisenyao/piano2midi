@@ -19,9 +19,10 @@ from pathlib import Path
 
 import pretty_midi
 
-OUTPUT_DIR = Path("output")
+from .cleanup import pedal_intervals
+
+OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"  # in the project, wherever a command runs from
 MIDI_DIR = OUTPUT_DIR / "MIDI Files"          # the MIDI files you play
-PLAYLIST = MIDI_DIR / "playlist.m3u"
 DB_PATH = OUTPUT_DIR / "library.db"
 CACHE_DIR = OUTPUT_DIR / ".cache"              # downloads, raw MIDI, statistics, task state
 
@@ -76,27 +77,27 @@ def _terms(text: str) -> set[str]:
 def midi_stats(path: Path) -> dict:
     midi = pretty_midi.PrettyMIDI(str(path))
     notes = [n for inst in midi.instruments for n in inst.notes]
-    pedal = sorted((c for inst in midi.instruments for c in inst.control_changes if c.number == 64),
-                   key=lambda c: c.time)
-    presses, down = 0, False
-    for c in pedal:
-        if c.value >= 64 and not down:
-            presses += 1
-        down = c.value >= 64
     velocities = [n.velocity for n in notes]
     return {
         "notes": len(notes),
         "velocity_min": min(velocities) if velocities else None,
         "velocity_max": max(velocities) if velocities else None,
-        "pedal_presses": presses,
+        "pedal_presses": len(pedal_intervals([c for inst in midi.instruments for c in inst.control_changes])),
         "duration_s": round(midi.get_end_time(), 1),
     }
 
 
-def place_midi(src: Path, title: str, midi_dir: Path = MIDI_DIR) -> Path:
+def safe_name(name: str) -> str:
+    """A file name from a title: no characters file systems reject, and not too long."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", name).strip(" .")
+    name = name.encode("utf-8")[:160].decode("utf-8", errors="ignore").rstrip(" .")
+    return name or "Untitled"
+
+
+def place_midi(src: Path, title: str, midi_dir: Path) -> Path:
     """Copy a MIDI file into the MIDI folder as '<title>.mid' without overwriting a different file."""
     midi_dir.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", title).strip(" .") or "Untitled"
+    safe = safe_name(title)
     dest = midi_dir / f"{safe}.mid"
     n = 2
     while dest.exists() and not filecmp.cmp(src, dest, shallow=False):
@@ -119,13 +120,14 @@ def file_result(lib: "Library", produced: Path, title: str, *, source_type: str,
             shutil.copy2(produced, known["midi_path"])
         return lib.add(Path(known["midi_path"]), known["title"], composer=composer, performer=performer,
                        tags=tags, source_type=source_type, source_url=source_url)
-    return lib.add(place_midi(Path(produced), title), title, composer=composer, performer=performer,
+    return lib.add(place_midi(Path(produced), title, lib.midi_dir), title, composer=composer, performer=performer,
                    tags=tags, source_type=source_type, source_url=source_url)
 
 
 class Library:
     def __init__(self, db_path: Path = DB_PATH):
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.midi_dir = db_path.parent / MIDI_DIR.name  # the MIDI files and playlist sit next to their index
         self.db = sqlite3.connect(db_path)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
@@ -146,7 +148,9 @@ class Library:
         return [self._public(r) for r in self.db.execute("SELECT * FROM recordings ORDER BY title")]
 
     def add(self, midi_path: Path, title: str, *, composer: str = "", performer: str = "",
-            aliases: str = "", tags: str = "", source_type: str = "local", source_url: str = "") -> dict:
+            aliases: str = "", tags: str = "", source_type: str = "local", source_url: str = "",
+            playlist: bool = True) -> dict:
+        """Add or update a recording; playlist=False leaves the playlist to the caller, for many at once."""
         midi_path = Path(midi_path).resolve()
         stats = midi_stats(midi_path)
         self.db.execute(
@@ -167,7 +171,8 @@ class Library:
              stats["notes"], stats["velocity_min"], stats["velocity_max"], stats["pedal_presses"],
              stats["duration_s"], _now()))
         self.db.commit()
-        self.write_playlist()
+        if playlist:
+            self.write_playlist()
         row = self.db.execute("SELECT * FROM recordings WHERE midi_path = ?", (str(midi_path),)).fetchone()
         return self._public(row)
 
@@ -185,8 +190,9 @@ class Library:
         rows = (self._public(r) for r in self.db.execute("SELECT * FROM recordings ORDER BY id"))
         return [r for r in rows if r["file_exists"]]
 
-    def write_playlist(self, path: Path = PLAYLIST) -> None:
-        """Rewrite the .m3u playlist from playlist()."""
+    def write_playlist(self) -> None:
+        """Rewrite the .m3u playlist from playlist(); files deleted by hand drop out."""
+        path = self.midi_dir / "playlist.m3u"
         path.parent.mkdir(parents=True, exist_ok=True)
         folder = path.parent.resolve()
         lines = ["#EXTM3U"]
@@ -226,10 +232,12 @@ class Library:
             if src.name.endswith(".raw.mid") or "extras" in src.parts:  # piano2midi side files
                 continue
             try:
-                path = place_midi(src, src.stem) if copy else src
-                added.append(self.add(path, src.stem, source_type="import", source_url=str(src.resolve())))
+                path = place_midi(src, src.stem, self.midi_dir) if copy else src
+                added.append(self.add(path, src.stem, source_type="import", source_url=str(src.resolve()),
+                                      playlist=False))
             except Exception as exc:  # skip unreadable files, keep importing
                 print(f"  skipped {src.name}: {exc}", file=sys.stderr)
+        self.write_playlist()
         return added
 
     @staticmethod

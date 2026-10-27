@@ -222,7 +222,7 @@ A Mac mini needs an external microphone, such as a USB camera microphone or a he
 the input and output in System Settings > Sound. You can check the selected devices with
 `.venv/bin/python -m sounddevice`; grant microphone access to Terminal when macOS asks.
 
-Without ElevenLabs the macOS voice speaks and a beep stands in for her greetings. The first run
+Without ElevenLabs the macOS voice speaks, greetings included. The first run
 downloads two small models (about 34 MB) into `output/.cache/models`. To give her other names,
 see [Her name](#her-name).
 
@@ -307,11 +307,14 @@ is not required to run piano2midi. This alternative has not been part of the Mac
 ```
 
 Say "Hey Jasmine", or her Chinese name Xiaoming Tongxue, and ask for a piece. Say it in one
-breath ("Hey Jasmine, stop"), or pause after the name: she answers in the language of the name
+breath ("Hey Jasmine, stop"), or pause after the name: she greets you in the language of the name
 you used, then listens. Anything that is playing pauses while you speak and continues
 afterwards, unless you asked to stop or for something else. "Stop", "continue" and "start over"
 (also in Chinese) act at once; everything else goes to the same assistant as the chat, and she
-speaks the answer. Control+C quits.
+speaks the answer while it is still being made. After a reply you can go on without her name for
+eight seconds, but not while the piano plays, whose sound would be taken for speech; otherwise,
+or after "再见" / "bye", she waits for her name again. Control+C quits. The terminal shows what she
+heard and what she said.
 
 Successful pause, continue and restart requests get a short acknowledgment. The assistant
 speaks as a musical companion playing for you, with small variations in the control replies;
@@ -369,8 +372,89 @@ nontechnical spoken reminder.
 - **What you said:** OpenAI `gpt-transcribe`, with your library's titles and names as spelling
   hints and the languages in `PIANO2MIDI_LANGUAGES`.
 
-`./run.sh voice --debug` shows which name she heard, what she answered, and when nothing was
-heard after the name.
+`./run.sh voice --debug` also shows each time she hears her name, and which one.
+
+## iPhone Voice
+
+The same voice assistant, with your iPhone as her microphone and speaker. The page is a single
+orb: gray when off or paused, in color while she listens, moving with your voice and hers.
+
+<p align="center">
+  <img src="docs/iphone-voice.gif" alt="The iPhone Voice page: a gray orb turns half colored while it starts, blue while she listens and speaks, and gray again when paused" width="200">
+</p>
+
+It runs in your home network: the page comes from your Mac, and the phone talks only to the Mac.
+As with `./run.sh voice`, what you say after her name goes to OpenAI for recognition, and her
+replies to ElevenLabs.
+
+### Set up the iPhone (once)
+
+The Mac and the iPhone need the same Wi-Fi. Safari lets a page use the microphone only over trusted
+HTTPS, so the Mac makes its own small certificate authority, and the iPhone is told once to trust it.
+
+1. **Install** the page's server. It uses the keys and voice settings from [Setup](#setup),
+   step 5:
+
+   ```bash
+   uv pip install --python .venv/bin/python -e '.[web-voice]'
+   ```
+
+2. **Start it** on the Mac:
+
+   ```bash
+   ./run.sh web-voice
+   ```
+
+   It prints the page's address after `iPhone Voice:`, with the Mac's network address in it, for
+   example `https://192.168.1.20:8765/#token=...`. If macOS asks whether Python may accept
+   incoming connections, allow it. Control+C stops it.
+
+3. **Trust the Mac on the iPhone.** The first start also makes
+   `output/.cache/phone-tls/piano2midi-CA.cer`, shows it in Finder and lists these steps. AirDrop
+   that file, and only that one, to the iPhone (right-click → Share → AirDrop), and install it in
+   Settings → General → VPN & Device Management. Then turn on full trust for it ("piano2midi on"
+   and the Mac's name) in Settings → General → About → Certificate Trust Settings.
+
+4. **Open the page** at the printed address in Safari on the iPhone. Share → **Add to Home
+   Screen** makes it an app that keeps this address. Open the app, tap the orb and allow the
+   microphone.
+
+After that, start the server and open the app. Every start makes a fresh certificate for the Mac's
+current network address, so the iPhone never needs the certificate again. If the router gives the
+Mac a new address, the printed address changes with it; add the new one to the Home Screen. A DHCP
+reservation for the Mac in the router keeps the address fixed, as long as the Mac's Private Wi-Fi
+Address for that network (System Settings → Wi-Fi → Details) is not set to Rotating. The page is
+opened at the address rather than at the Mac's `.local` name because Safari does not keep the
+microphone permission for `.local` names, and would ask every time. For another iPhone,
+`open -R output/.cache/phone-tls/piano2midi-CA.cer` shows the file again.
+
+**Keep private:** the `.pem` files and the token, all in `output/`, which is never committed. With
+the token, anyone on your Wi-Fi could use the page. The certificate authority can vouch only for
+`.local` names and home network addresses, so even its key could not pass anything off as a
+website. `piano2midi-CA.cer` holds no secret. To start afresh, delete `output/.cache/phone-token`
+(a new address, to add to the Home Screen again) or `output/.cache/phone-tls/` (a new certificate
+authority, to install again).
+
+### Using it
+
+- **Tap the orb** to start. It is half colored while it starts (more taps do not cancel it), then
+  turns to color with a start sound. From then on it is the same conversation as
+  `./run.sh voice`, the same code, with the phone as her ears and voice.
+- **Tap again to pause.** She stops listening and speaking at once, and the piano about a second
+  later, once the notes already sent have played (see [Playback](#playback)). A task in progress
+  finishes only its current step; the microphone is released after the end sound. Tap to continue
+  from the same place in the same conversation.
+- **Closing the page**, locking the phone or switching apps ends the conversation and stops the
+  music. The orb is gray again the next time.
+
+The Mac does the rest, with the same keys and settings as `./run.sh voice`: it listens for her
+name, sends what follows it to speech recognition, asks the assistant, and sends her voice to the
+phone while it is being made. Nothing is played on the Mac's speakers and its microphone is not
+used; the piano plays through your usual MIDI route. One phone at a time, and not alongside
+`./run.sh voice` or `./run.sh chat`. You cannot interrupt her by speaking, but a tap pauses her.
+The page has to stay in front; it keeps the screen on while it is connected, and does not zoom or
+scroll. In portrait the iPhone still shows its status bar, which only native apps can hide.
+`--debug` shows each time she hears her name, as with `./run.sh voice --debug`.
 
 ## Playback
 
@@ -474,7 +558,10 @@ Set these in your shell profile; [Setup](#setup) says which ones you need.
 
 Works best on solo piano. There is no vocal or accompaniment separation, so the assistant looks
 for piano-led recordings, and transcription may miss notes or predict incorrect ones. The sustain
-pedal is on or off. Download only individual videos you are permitted to access and download.
+pedal is on or off. Recordings are limited to 60 minutes, which fits even the longest sonatas;
+longer videos are not offered by the search and are refused before downloading.
+Run one of chat, voice and iPhone Voice at a time: each controls the same piano on its own.
+Download only individual videos you are permitted to access and download.
 Playlist expansion, live streams and bypassing access restrictions are not supported. Website
 support depends on yt-dlp; download failures are recorded in the CSV. To update the downloader:
 
@@ -498,14 +585,18 @@ MAESTRO dataset (CC BY-NC-SA 4.0); check the applicable terms before commercial 
 assistant uses [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) keyword spotting and
 [Silero VAD](https://github.com/snakers4/silero-vad).
 
-## Playback regression checks
+## Checks
 
-Run offline checks with `.venv/bin/python -m unittest discover -s tests`.
+Run offline checks with `.venv/bin/python -m unittest discover -s tests`. The iPhone Voice checks
+also need `uv pip install --python .venv/bin/python httpx`, and its page has its own, run with
+Node.js: `for test in tests/test_web_*.js; do node "$test"; done`. None of them uses paid APIs, a
+microphone or a MIDI device.
 For a user-run real-model check, run `.venv/bin/python tests/manual_playback_intents.py`.
 It tests 16 utterances against a temporary library and simulated playback; it does not use
 the microphone, speak, play actual MIDI, or change the production library. It uses the configured
-chat model and account. `--list` lists the cases without any API calls. Hardware playback and
-real microphone recognition still need a separate end-to-end check.
+chat model and account. `--list` lists the cases without any API calls. Hardware playback, real
+microphone recognition and iPhone Voice on a real phone (wake accuracy, audio routing, the start
+and end sounds) still need a separate end-to-end check.
 
 Playback tools separate selection from current-piece control: `play_recording(id)` accepts only
 IDs offered by library search or transcription in the current request; `control_playback(action)`

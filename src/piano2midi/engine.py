@@ -38,7 +38,7 @@ class TranskunEngine:
         with resources.as_file(base / "2.0.pt") as weight_path:
             checkpoint = torch.load(weight_path, map_location="cpu", weights_only=False)
         state = checkpoint.get("best_state_dict", checkpoint.get("state_dict"))
-        self.model.load_state_dict(state, strict=False)
+        self.model.load_state_dict(state)  # every weight must match the model, or loading fails
         self.model.to(self.device).eval()
         self.sample_rate = int(self.model.fs)
         self.version = f"transkun {version('transkun')} (pretrained 2.0)"

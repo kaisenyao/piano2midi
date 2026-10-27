@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import os
-import re
 import sys
 import tempfile
 import traceback
@@ -12,6 +11,7 @@ from pathlib import Path
 import pretty_midi
 
 from .download import download_audio, task_id, valid_audio
+from .library import safe_name
 from .pipeline import Options, convert_file
 
 COLUMNS = ["url", "name", "status", "audio_path", "midi_path", "error"]
@@ -64,13 +64,6 @@ def valid_midi(path: Path) -> bool:
         return True
     except Exception:
         return False
-
-
-def safe_name(name: str) -> str:
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", name).strip(" .")
-    # Keep UTF-8 filenames below common filesystem component limits.
-    name = name.encode("utf-8")[:160].decode("utf-8", errors="ignore").rstrip(" .")
-    return name or "Untitled"
 
 
 def run_csv(csv_path, out_dir, options: Options, *, overwrite=False,

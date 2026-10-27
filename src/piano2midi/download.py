@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .audio import ffmpeg_exe
+from .audio import MAX_AUDIO_S, ffmpeg_exe
 
 
 def task_id(url: str) -> str:
@@ -76,6 +76,8 @@ def download_audio(url: str, cache_dir: Path) -> tuple[Path, str]:
                 raise ValueError("provide a single video URL, not a playlist or channel")
             if info.get("is_live") or info.get("live_status") == "is_upcoming":
                 raise ValueError("live/upcoming streams are not supported")
+            if (info.get("duration") or 0) > MAX_AUDIO_S:
+                raise ValueError(f"the video is longer than {MAX_AUDIO_S // 60} minutes")
             info = ydl.process_ie_result(info, download=True)
             downloaded = Path(ydl.prepare_filename(info))
         if not valid_audio(downloaded):
