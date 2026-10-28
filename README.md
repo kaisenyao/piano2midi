@@ -545,21 +545,6 @@ Set these in your shell profile; [Setup](#setup) says which ones you need.
 | `PIANO2MIDI_VOICE_ID` | | which ElevenLabs voice |
 | `PIANO2MIDI_TTS_MODEL` | `eleven_v4_turbo` | ElevenLabs model |
 
-## Update
-
-To bring an installed copy up to date, quit chat, voice and iPhone Voice, then from the project
-folder:
-
-```bash
-git pull --ff-only
-uv pip install --python .venv/bin/python -e ".[voice,web-voice]"
-```
-
-Then start them again. The library, certificates and token in `output/` and the keys in your
-shell profile stay as they are. If `git pull` stops because of local changes, this copy was edited
-in place: make changes where you develop, push them, and only pull on a Mac that plays. To check
-the update, see [Checks](#checks).
-
 ## Limits and maintenance
 
 Works best on solo piano. There is no vocal or accompaniment separation, so the assistant looks
@@ -593,8 +578,7 @@ assistant uses [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) keyword spot
 
 ## Checks
 
-Run offline checks with `.venv/bin/python -m unittest discover -s tests -t .`. They use
-piano2midi's defaults, whatever `PIANO2MIDI_` settings your shell has. The iPhone Voice checks
+Run offline checks with `.venv/bin/python -m unittest discover -s tests`. The iPhone Voice checks
 also need `uv pip install --python .venv/bin/python httpx`, and its page has its own, run with
 Node.js: `for test in tests/test_web_*.js; do node "$test"; done`. None of them uses paid APIs, a
 microphone or a MIDI device.
